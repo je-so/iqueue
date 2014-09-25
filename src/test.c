@@ -1,3 +1,4 @@
+// #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <malloc.h>
@@ -128,7 +129,6 @@ int allocated_bytes(/*out*/size_t * nrofbytes)
 
    return 0;
 ONERR:
-   err = errno;
    if (pfd[0] != -1) close(pfd[0]);
    if (pfd[1] != -1) close(pfd[1]);
    if (fd != -1) {
