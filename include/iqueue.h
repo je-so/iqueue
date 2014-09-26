@@ -19,10 +19,11 @@
 typedef struct iqsignal_t {
    pthread_mutex_t lock;
    pthread_cond_t  cond;
+   int signaled;
 } iqsignal_t;
 
 typedef struct iqmsg_t {
-   iqsignal_t* signal;
+   iqsignal_t * signal;
    int processed;
 } iqmsg_t;
 
@@ -69,10 +70,40 @@ int tryrecv_iqueue(iqueue_t * queue, /*out*/iqmsg_t ** msg);
 // EPIPE is returned if queue is closed.
 int recv_iqueue(iqueue_t * queue, /*out*/iqmsg_t ** msg);
 
-// === iqmsg_t ===
-
 // === iqsignal_t ===
 
+int init_iqsignal(/*out*/iqsignal_t * signal);
 
+int free_iqsignal(iqsignal_t * signal);
+
+void wait_iqsignal(iqsignal_t * signal);
+
+void signal_iqsignal(iqsignal_t * signal);
+
+int issignaled_iqsignal(iqsignal_t * signal);
+
+// === iqmsg_t ===
+
+#define iqmsg_INIT(signal) \
+         { signal, 0 }
+
+static inline void init_iqmsg(iqmsg_t * msg, iqsignal_t * signal)
+{
+         msg->signal = signal;
+         msg->processed = 0;
+}
+
+static inline int isprocessed_iqmsg(iqmsg_t * msg)
+{
+         return __sync_val_compare_and_swap(&msg->processed, 0, 0);
+}
+
+static inline void setprocessed_iqmsg(iqmsg_t * msg)
+{
+         __sync_val_compare_and_swap(&msg->processed, 0, 1);
+         if (msg->signal) {
+            signal_iqsignal(msg->signal);
+         }
+}
 
 #endif
