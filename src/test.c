@@ -1,4 +1,3 @@
-// #define _GNU_SOURCE
 #include "iqueue.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -143,8 +142,8 @@ ONERR:
    }
    return err;
 }
-#else
 
+#else
 // Implement allocated_bytes for your operating system here !
 int allocated_bytes(size_t * nrofbytes)
 {
@@ -227,7 +226,7 @@ static void test_initfree(void)
    PASS();
 
    // TEST new_iqueue: different size parameter
-   for (size_t s = 1; s <= 65536; s <<= 1, s += 33) {
+   for (size_t s = 1; s < 65536; s <<= 1, s += 33) {
       TEST(0 == new_iqueue(&queue, s));
       TEST(0 != queue);
       TEST(s == queue->size);
@@ -254,13 +253,168 @@ static void test_initfree(void)
    PASS();
 }
 
-static void test_sendrecv_single(void);
+static void* thread_simulate_read(void * param)
 {
-   // sending and receiving with single thread
+   iqueue_t * queue = param;
 
-   // TODO: implement
+   TEST(0 == queue->waitreader);
+   TEST(0 == pthread_mutex_lock(&queue->readlock));
+   size_t pos = queue->readpos;
+   ++ queue->waitreader;
+   TEST(0 == queue->msg[pos]);
+   TEST(0 == pthread_cond_wait(&queue->readcond, &queue->readlock));
+   TEST(0 != queue->msg[pos]);
+   -- queue->waitreader;
+   TEST(0 == pthread_mutex_unlock(&queue->readlock));
 
+   return 0;
+}
+
+static void test_trysend_single(void)
+{
+   iqueue_t * queue = 0;
+   iqmsg_t    msg[10];
+   pthread_t  thr;
+
+   // prepare
+   TEST(0 == new_iqueue(&queue, 10));
+
+   // TEST trysend_iqueue: EINVAL
+   TEST(EINVAL == trysend_iqueue(queue, 0));
    PASS();
+
+   // TEST trysend_iqueue: EPIPE
+   queue->closed = 1;
+   TEST(EPIPE == trysend_iqueue(queue, &msg[0]));
+   TEST(0 == queue->msg[0]);
+   queue->closed = 0;
+   PASS();
+
+   // TEST trysend_iqueue: store into queue
+   for (unsigned i = 0; i < 10; ++i) {
+      unsigned n = (i+1) % queue->size;
+      TEST(0 == queue->msg[i]);
+      TEST(0 == trysend_iqueue(queue, &msg[i]));
+      TEST(10 == queue->size);
+      TEST(0 == queue->readpos);
+      TEST(n == queue->writepos);
+      TEST(0 == queue->waitreader);
+      TEST(0 == queue->waitwriter);
+      TEST(0 == queue->closed);
+      TEST(&msg[i] == queue->msg[i]);
+   }
+   PASS();
+
+   // TEST trysend_iqueue: EAGAIN
+   TEST(EAGAIN == trysend_iqueue(queue, &msg[1]));
+   TEST(&msg[0] == queue->msg[0]);
+   PASS();
+
+   // TEST trysend_iqueue: wakeup waiting reader
+   memset(queue->msg, 0, sizeof(queue->msg[0]) * queue->size);
+   for (unsigned i = 0; i < 10; ++i) {
+      queue->readpos = i;
+      TEST(0 == pthread_create(&thr, 0, &thread_simulate_read, queue));
+      for (int wc = 0; wc < 10000; ++wc) {
+         sched_yield();
+         if (__sync_fetch_and_add(&queue->waitreader, 0)) break;
+      }
+      TEST(1 == __sync_fetch_and_add(&queue->waitreader, 0));
+      TEST(0 == trysend_iqueue(queue, &msg[i]));
+      for (int wc = 0; wc < 10000; ++wc) {
+         sched_yield();
+         if (0 == __sync_fetch_and_add(&queue->waitreader, 0)) break;
+      }
+      TEST(0 == __sync_fetch_and_add(&queue->waitreader, 0));
+      TEST(0 == pthread_join(thr, 0));
+   }
+   memset(queue->msg, 0, sizeof(queue->msg[0]) * queue->size);
+   queue->readpos = 0;
+   PASS();
+
+   // unprepare
+   TEST(0 == delete_iqueue(&queue));
+}
+
+static void* thread_simulate_write(void * param)
+{
+   iqueue_t * queue = param;
+
+   TEST(0 == queue->waitreader);
+   TEST(0 == pthread_mutex_lock(&queue->readlock));
+   size_t pos = queue->readpos;
+   ++ queue->waitreader;
+   TEST(0 == queue->msg[pos]);
+   TEST(0 == pthread_cond_wait(&queue->readcond, &queue->readlock));
+   TEST(0 != queue->msg[pos]);
+   -- queue->waitreader;
+   TEST(0 == pthread_mutex_unlock(&queue->readlock));
+
+   return 0;
+}
+
+static void test_send_single(void)
+{
+   iqueue_t * queue = 0;
+   iqmsg_t    msg[10];
+   pthread_t  thr;
+
+   // prepare
+   TEST(0 == new_iqueue(&queue, 10));
+
+   // TEST send_iqueue: EINVAL
+   TEST(EINVAL == send_iqueue(queue, 0));
+   PASS();
+
+   // TEST send_iqueue: EPIPE
+   queue->closed = 1;
+   TEST(EPIPE == send_iqueue(queue, &msg[0]));
+   TEST(0 == queue->msg[0]);
+   queue->closed = 0;
+   PASS();
+
+   // TEST send_iqueue: store into queue
+   for (unsigned i = 0; i < 10; ++i) {
+      unsigned n = (i+1) % queue->size;
+      TEST(0 == queue->msg[i]);
+      TEST(0 == send_iqueue(queue, &msg[i]));
+      TEST(10 == queue->size);
+      TEST(0 == queue->readpos);
+      TEST(n == queue->writepos);
+      TEST(0 == queue->waitreader);
+      TEST(0 == queue->waitwriter);
+      TEST(0 == queue->closed);
+      TEST(&msg[i] == queue->msg[i]);
+   }
+   PASS();
+
+   // TODO:
+
+   // TEST trysend_iqueue: wakeup waiting reader
+   memset(queue->msg, 0, sizeof(queue->msg[0]) * queue->size);
+   for (unsigned i = 0; i < 10; ++i) {
+      queue->readpos = i;
+      TEST(0 == pthread_create(&thr, 0, &thread_simulate_read, queue));
+      for (int wc = 0; wc < 10000; ++wc) {
+         sched_yield();
+         if (__sync_fetch_and_add(&queue->waitreader, 0)) break;
+      }
+      TEST(1 == __sync_fetch_and_add(&queue->waitreader, 0));
+      TEST(0 == trysend_iqueue(queue, &msg[i]));
+      for (int wc = 0; wc < 10000; ++wc) {
+         sched_yield();
+         if (0 == __sync_fetch_and_add(&queue->waitreader, 0)) break;
+      }
+      TEST(0 == __sync_fetch_and_add(&queue->waitreader, 0));
+      TEST(0 == pthread_join(thr, 0));
+   }
+   memset(queue->msg, 0, sizeof(queue->msg[0]) * queue->size);
+   queue->readpos = 0;
+   PASS();
+
+   // unprepare
+   TEST(0 == delete_iqueue(&queue));
+
 }
 
 int main(void)
@@ -276,7 +430,8 @@ int main(void)
       TEST(0 == allocated_bytes(&nrofbytes));
 
       test_initfree();
-      test_sendrecv_single();
+      test_trysend_single();
+      test_send_single();
 
       TEST(0 == allocated_bytes(&nrofbytes2));
       if (nrofbytes == nrofbytes2) break;
