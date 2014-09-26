@@ -32,6 +32,9 @@ iqueue: bin/iqueue.a bin/iqueue_debug.a
 
 test: bin/iqueue_test bin/iqueue_test_debug
 
+run: bin/iqueue_test
+	@bin/iqueue_test
+
 bin/iqueue_test: src/test.c bin/iqueue_debug.a
 	@echo $(CC) $^ $(LIBS) -o $@
 	@$(CC) $(CFLAGS_debug) $^ $(LIBS) -o $@
