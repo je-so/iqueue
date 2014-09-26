@@ -178,9 +178,11 @@ void close_iqueue(iqueue_t * queue)
       pthread_mutex_lock(&queue->readlock);
       pthread_cond_broadcast(&queue->readcond);
       pthread_mutex_unlock(&queue->readlock);
+
       pthread_mutex_lock(&queue->writelock);
       pthread_cond_broadcast(&queue->writecond);
       pthread_mutex_unlock(&queue->writelock);
+
       sched_yield();
    }
 }
