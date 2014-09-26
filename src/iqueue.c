@@ -25,6 +25,75 @@ static int init_mutex(/*out*/pthread_mutex_t * mutex)
    return err;
 }
 
+static int init_cond(/*out*/pthread_cond_t * cond)
+{
+   int err;
+
+   err = pthread_cond_init(cond, 0);
+
+   return err;
+}
+
+int init_iqsignal(/*out*/iqsignal_t * signal)
+{
+   int err;
+
+   err = init_mutex(&signal->lock);
+   if (err) return err;
+
+   err = init_cond(&signal->cond);
+   if (err) {
+      (void) pthread_mutex_destroy(&signal->lock);
+   }
+
+   return err;
+}
+
+int free_iqsignal(iqsignal_t * signal)
+{
+   int err = pthread_mutex_destroy(&signal->lock);
+   int err2 = pthread_cond_destroy(&signal->cond);
+
+   if (err2) err = err2;
+
+   return err;
+}
+
+void wait_iqsignal(iqsignal_t * signal)
+{
+   pthread_mutex_lock(&signal->lock);
+
+   if (! signal->signaled) {
+      pthread_cond_wait(&signal->cond, &signal->lock);
+   }
+
+   signal->signaled = 0;
+
+   pthread_mutex_unlock(&signal->lock);
+}
+
+void signal_iqsignal(iqsignal_t * signal)
+{
+   pthread_mutex_lock(&signal->lock);
+
+   signal->signaled = 1;
+   pthread_cond_signal(&signal->cond);
+
+   pthread_mutex_unlock(&signal->lock);
+}
+
+int issignaled_iqsignal(iqsignal_t * signal)
+{
+   pthread_mutex_lock(&signal->lock);
+
+   int issignaled = signal->signaled;
+
+   pthread_mutex_unlock(&signal->lock);
+
+   return issignaled;
+}
+
+
 int new_iqueue(/*out*/iqueue_t ** queue, size_t size)
 {
    if (size == 0 || size >= (SIZE_MAX - sizeof(iqueue_t)) / sizeof(void*)) {
@@ -52,11 +121,11 @@ int new_iqueue(/*out*/iqueue_t ** queue, size_t size)
    if (err) goto ONERR;
    initcount = 2;
 
-   err = pthread_cond_init(&allocated_queue->readcond, 0);
+   err = init_cond(&allocated_queue->readcond);
    if (err) goto ONERR;
    initcount = 3;
 
-   err = pthread_cond_init(&allocated_queue->writecond, 0);
+   err = init_cond(&allocated_queue->writecond);
    if (err) goto ONERR;
    // initcount = 4;
 
@@ -208,14 +277,13 @@ int tryrecv_iqueue(iqueue_t * queue, /*out*/iqmsg_t ** msg)
          newpos = 0;
       }
 
-      if (0 == __sync_val_compare_and_swap(
-                  &queue->msg[readpos],
-                  /*old value*/ (void*)0,
-                  /*new value*/ (void*)msg)) {
+      void * fetchedmsg = __sync_fetch_and_and(&queue->msg[readpos], 0);
+      if (0 != fetchedmsg) {
+         *msg = fetchedmsg;
          break;
       }
 
-      if (0 != queue->msg[newpos]) {
+      if (0 == queue->msg[newpos]) {
          return EAGAIN;
       }
 
