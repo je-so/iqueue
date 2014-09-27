@@ -15,6 +15,7 @@
 #define IQUEUE_H
 
 #include <pthread.h>
+#include <stdint.h>
 #include "atomic.h"
 
 typedef struct iqsignal0_t {
@@ -30,14 +31,13 @@ typedef struct iqsignal_t {
 
 typedef struct iqmsg_t {
    iqsignal_t* signal;
-   int processed;
+   uint32_t processed;
 } iqmsg_t;
 
 typedef struct iqueue_t {
-   size_t  size;
-   size_t  readpos;
-   size_t  writepos;
-   int     closed;
+   uint16_t size;
+   uint32_t next_and_nrofmsg;
+   uint32_t closed;
    iqsignal0_t reader;
    iqsignal0_t writer;
    void*   msg[/*size*/];
@@ -47,7 +47,7 @@ typedef struct iqueue_t {
 
 // Initializes queue
 // Possible error codes: ENOMEM
-int new_iqueue(/*out*/iqueue_t** queue, size_t size);
+int new_iqueue(/*out*/iqueue_t** queue, uint16_t size);
 
 // Frees all resources of queue. Close is called automatically.
 int delete_iqueue(iqueue_t** queue);
@@ -90,7 +90,7 @@ void signal_iqsignal(iqsignal_t* signal);
 // Returns the how many times signal_iqsignal(signal) was called (Nr of processed messages).
 static inline size_t signalcount_iqsignal(iqsignal_t* signal)
 {
-         return add_atomicsize(&signal->signalcount, 0);
+         return cmpxchg_atomicsize(&signal->signalcount, 0, 0);
 }
 
 // === iqmsg_t ===
@@ -108,14 +108,14 @@ static inline void init_iqmsg(iqmsg_t* msg, iqsignal_t* signal)
          msg->processed = 0;
 }
 
-static inline int isprocessed_iqmsg(iqmsg_t* msg)
+static inline uint32_t isprocessed_iqmsg(iqmsg_t* msg)
 {
-         return cmpxchg_atomicint(&msg->processed, 0, 0);
+         return cmpxchg_atomicu32(&msg->processed, 0, 0);
 }
 
 static inline void setprocessed_iqmsg(iqmsg_t* msg)
 {
-         cmpxchg_atomicint(&msg->processed, 0, 1);
+         cmpxchg_atomicu32(&msg->processed, 0, 1);
          if (msg->signal) {
             signal_iqsignal(msg->signal);
          }
