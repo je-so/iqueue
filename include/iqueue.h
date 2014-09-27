@@ -1,6 +1,6 @@
 /* iqueue.h
 
-   Defines interface of a lock-free interthread message queue.
+   Defines interface of a zero-copy, lock-free interthread message queue.
 
    Every function returning an int indicates success with
    value 0. A returned value > 0 indicates an error code.
@@ -11,10 +11,11 @@
    Author:
    (C) 2014 Jörg Seebohn
 */
-#ifndef IQUEUE_HEADER
-#define IQUEUE_HEADER
+#ifndef IQUEUE_H
+#define IQUEUE_H
 
 #include <pthread.h>
+#include "atomic.h"
 
 typedef struct iqsignal0_t {
    pthread_mutex_t lock;
@@ -87,7 +88,10 @@ void wait_iqsignal(iqsignal_t* signal);
 void signal_iqsignal(iqsignal_t* signal);
 
 // Returns the how many times signal_iqsignal(signal) was called (Nr of processed messages).
-size_t signalcount_iqsignal(iqsignal_t* signal);
+static inline size_t signalcount_iqsignal(iqsignal_t* signal)
+{
+         return add_atomicsize(&signal->signalcount, 0);
+}
 
 // === iqmsg_t ===
 
@@ -106,12 +110,12 @@ static inline void init_iqmsg(iqmsg_t* msg, iqsignal_t* signal)
 
 static inline int isprocessed_iqmsg(iqmsg_t* msg)
 {
-         return __sync_val_compare_and_swap(&msg->processed, 0, 0);
+         return cmpxchg_atomicint(&msg->processed, 0, 0);
 }
 
 static inline void setprocessed_iqmsg(iqmsg_t* msg)
 {
-         __sync_val_compare_and_swap(&msg->processed, 0, 1);
+         cmpxchg_atomicint(&msg->processed, 0, 1);
          if (msg->signal) {
             signal_iqsignal(msg->signal);
          }
