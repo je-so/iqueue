@@ -63,11 +63,11 @@ void wait_iqsignal(iqsignal_t * signal)
 {
    pthread_mutex_lock(&signal->lock);
 
-   if (! signal->signaled) {
+   if (! signal->signalcount) {
       pthread_cond_wait(&signal->cond, &signal->lock);
    }
 
-   signal->signaled = 0;
+   signal->signalcount = 0;
 
    pthread_mutex_unlock(&signal->lock);
 }
@@ -76,21 +76,21 @@ void signal_iqsignal(iqsignal_t * signal)
 {
    pthread_mutex_lock(&signal->lock);
 
-   signal->signaled = 1;
-   pthread_cond_signal(&signal->cond);
+   ++ signal->signalcount;
+   pthread_cond_broadcast(&signal->cond);
 
    pthread_mutex_unlock(&signal->lock);
 }
 
-int issignaled_iqsignal(iqsignal_t * signal)
+size_t signalcount_iqsignal(iqsignal_t * signal)
 {
    pthread_mutex_lock(&signal->lock);
 
-   int issignaled = signal->signaled;
+   size_t signalcount = signal->signalcount;
 
    pthread_mutex_unlock(&signal->lock);
 
-   return issignaled;
+   return signalcount;
 }
 
 
