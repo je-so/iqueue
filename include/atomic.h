@@ -21,37 +21,17 @@ static inline void* cmpxchg_atomicptr(void** pval, void* oldval, void* newval)
 }
 
 // Does the following operations in one atomic step:
+// { uint32_t old = *pval; if (old == oldval) *pval = newval; return old; }
+static inline uint32_t cmpxchg_atomicu32(uint32_t* pval, uint32_t oldval, uint32_t newval)
+{
+         return __sync_val_compare_and_swap(pval, oldval, newval);
+}
+
+// Does the following operations in one atomic step:
 // { size_t old = *pval; if (old == oldval) *pval = newval; return old; }
 static inline size_t cmpxchg_atomicsize(size_t* pval, size_t oldval, size_t newval)
 {
          return __sync_val_compare_and_swap(pval, oldval, newval);
 }
-
-static inline int cmpxchg_atomicint(int* pval, int oldval, int newval)
-{
-         return __sync_val_compare_and_swap(pval, oldval, newval);
-}
-
-// Does the following operations in one atomic step:
-// { size_t old = *pval; *pval += value; return old; }
-static inline size_t add_atomicsize(size_t* pval, size_t value)
-{
-         return __sync_fetch_and_add(pval, value);
-}
-
-// Does the following operations in one atomic step:
-// { void* old = *pval; *pval &= value; return old; }
-static inline void* and_atomicptr(void** pval, void* value)
-{
-         return __sync_fetch_and_and(pval, value);
-}
-
-// Does the following operations in one atomic step:
-// { size_t old = *pval; *pval -= value; return old; }
-static inline size_t sub_atomicsize(size_t* pval, size_t value)
-{
-         return __sync_fetch_and_sub(pval, value);
-}
-
 
 #endif
