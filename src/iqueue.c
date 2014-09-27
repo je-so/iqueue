@@ -1,3 +1,13 @@
+/* iqueue.c
+
+   Implements zero-copy, lock-free interthread message queue.
+
+   Copyright:
+   This program is free software. See accompanying LICENSE file.
+
+   Author:
+   (C) 2014 Jörg Seebohn
+*/
 #define _GNU_SOURCE
 #include "iqueue.h"
 #include <errno.h>
@@ -108,17 +118,6 @@ void signal_iqsignal(iqsignal_t * signal)
    pthread_mutex_unlock(&signal->sign0.lock);
 }
 
-size_t signalcount_iqsignal(iqsignal_t* signal)
-{
-   pthread_mutex_lock(&signal->sign0.lock);
-
-   size_t signalcount = signal->signalcount;
-
-   pthread_mutex_unlock(&signal->sign0.lock);
-
-   return signalcount;
-}
-
 // === iqueue_t ===
 
 int new_iqueue(/*out*/iqueue_t** queue, size_t size)
@@ -183,11 +182,11 @@ int delete_iqueue(iqueue_t** queue)
 
 void close_iqueue(iqueue_t* queue)
 {
-   __sync_val_compare_and_swap(&queue->closed, 0, 1);
+   cmpxchg_atomicint(&queue->closed, 0, 1);
 
    // Wait until reader/writer woken up
-   while (  0 != __sync_val_compare_and_swap(&queue->reader.waitcount, 0, 0)
-            || 0 != __sync_val_compare_and_swap(&queue->writer.waitcount, 0, 0)) {
+   while (  0 != cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0)
+            || 0 != cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0)) {
       pthread_mutex_lock(&queue->reader.lock);
       pthread_cond_broadcast(&queue->reader.cond);
       pthread_mutex_unlock(&queue->reader.lock);
@@ -207,7 +206,7 @@ int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
    }
 
    size_t newpos;
-   size_t writepos = __sync_val_compare_and_swap(&queue->writepos, (size_t)0, (size_t)0);
+   size_t writepos = cmpxchg_atomicsize(&queue->writepos, (size_t)0, (size_t)0);
 
    for (;;) {
 
@@ -220,7 +219,7 @@ int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
          newpos = 0;
       }
 
-      if (0 == __sync_val_compare_and_swap(
+      if (0 == cmpxchg_atomicptr(
                   &queue->msg[writepos],
                   /*old value*/ (void*)0,
                   /*new value*/ (void*)msg)) {
@@ -231,11 +230,11 @@ int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
          return EAGAIN;
       }
 
-      size_t oldval = __sync_val_compare_and_swap(&queue->writepos, writepos, newpos);
+      size_t oldval = cmpxchg_atomicsize(&queue->writepos, writepos, newpos);
       writepos = (oldval == writepos) ? newpos : oldval;
    }
 
-   __sync_val_compare_and_swap(&queue->writepos, writepos, newpos);
+   cmpxchg_atomicsize(&queue->writepos, writepos, newpos);
 
    if (queue->reader.waitcount) {
       // wake up reader
@@ -252,7 +251,7 @@ int send_iqueue(iqueue_t* queue, iqmsg_t* msg)
    int err = trysend_iqueue(queue, msg);
 
    while (err == EAGAIN) {
-      __sync_fetch_and_add(&queue->writer.waitcount, 1);
+      add_atomicsize(&queue->writer.waitcount, 1);
       pthread_mutex_lock(&queue->writer.lock);
 
       err = trysend_iqueue(queue, msg);
@@ -262,7 +261,7 @@ int send_iqueue(iqueue_t* queue, iqmsg_t* msg)
       }
 
       pthread_mutex_unlock(&queue->writer.lock);
-      __sync_fetch_and_sub(&queue->writer.waitcount, 1);
+      sub_atomicsize(&queue->writer.waitcount, 1);
 
       if (EAGAIN == err) {
          err = trysend_iqueue(queue, msg);
@@ -279,7 +278,7 @@ int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
    }
 
    size_t newpos;
-   size_t readpos = __sync_val_compare_and_swap(&queue->readpos, (size_t)0, (size_t)0);
+   size_t readpos = cmpxchg_atomicsize(&queue->readpos, (size_t)0, (size_t)0);
 
    for (;;) {
 
@@ -302,11 +301,11 @@ int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
          return EAGAIN;
       }
 
-      size_t oldval = __sync_val_compare_and_swap(&queue->readpos, readpos, newpos);
+      size_t oldval = cmpxchg_atomicsize(&queue->readpos, readpos, newpos);
       readpos = (oldval == readpos) ? newpos : oldval;
    }
 
-   __sync_val_compare_and_swap(&queue->readpos, readpos, newpos);
+   cmpxchg_atomicsize(&queue->readpos, readpos, newpos);
 
    if (queue->writer.waitcount) {
       // wake up writer
@@ -323,7 +322,7 @@ int recv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
    int err = tryrecv_iqueue(queue, msg);
 
    while (err == EAGAIN) {
-      __sync_fetch_and_add(&queue->reader.waitcount, 1);
+      add_atomicsize(&queue->reader.waitcount, 1);
       pthread_mutex_lock(&queue->reader.lock);
 
       err = tryrecv_iqueue(queue, msg);
@@ -333,7 +332,7 @@ int recv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
       }
 
       pthread_mutex_unlock(&queue->reader.lock);
-      __sync_fetch_and_sub(&queue->reader.waitcount, 1);
+      sub_atomicsize(&queue->reader.waitcount, 1);
 
       if (EAGAIN == err) {
          err = tryrecv_iqueue(queue, msg);
