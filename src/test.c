@@ -600,6 +600,28 @@ static void test_recv_single(void)
    TEST(0 == delete_iqueue(&queue));
 }
 
+static void test_close(void)
+{
+   iqueue_t * queue = 0;
+
+   // prepare
+   TEST(0 == new_iqueue(&queue, 1));
+
+   // TEST close_iqueue: wakes up waiting reader and writer
+   // TODO: close_iqueue()
+
+   // TODO:
+
+   // prepare
+   TEST(0 == delete_iqueue(&queue));
+   TEST(0 == new_iqueue(&queue, 1));
+
+   // TEST delete_iqueue: wakes up waiting reader and writer
+   TEST(0 == delete_iqueue(&queue));
+   // TODO:
+
+}
+
 int main(void)
 {
    size_t nrofbytes;
@@ -617,6 +639,7 @@ int main(void)
       test_send_single();
       test_tryrecv_single();
       test_recv_single();
+      test_close();
 
       TEST(0 == allocated_bytes(&nrofbytes2));
       if (nrofbytes == nrofbytes2) break;
