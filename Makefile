@@ -16,11 +16,11 @@ SRC := src/iqueue.c
 OBJ_debug   := $(SRC:src/%.c=bin/debug/%.o)
 OBJ_release := $(SRC:src/%.c=bin/release/%.o)
 
-all:	info makedir iqueue test
+all:	info makedir iqueue test examples
 
 clean:
 	@echo clean bin/
-	@rm -rf bin/
+	@rm -rf bin/ example?
 
 info:
 	@echo Building iqueue on '$(OS)'
@@ -32,16 +32,22 @@ iqueue: bin/iqueue.a bin/iqueue_debug.a
 
 test: bin/iqueue_test bin/iqueue_test_debug
 
+examples: example1
+
 run: bin/iqueue_test
 	@bin/iqueue_test
 
-bin/iqueue_test: src/test.c bin/iqueue_debug.a
+bin/iqueue_test: src/test.c bin/iqueue.a
 	@echo $(CC) $^ $(LIBS) -o $@
-	@$(CC) $(CFLAGS_debug) $^ $(LIBS) -o $@
+	@$(CC) $(CFLAGS_release) $^ $(LIBS) -o $@
 
 bin/iqueue_test_debug: src/test.c bin/iqueue_debug.a
 	@echo $(CC) $^ $(LIBS) -o $@
 	@$(CC) $(CFLAGS_debug) $^ $(LIBS) -o $@
+
+example1: example1.c bin/iqueue.a
+	@echo $(CC) $^ $(LIBS) -o $@
+	@$(CC) $(CFLAGS_release) $^ $(LIBS) -o $@
 
 bin/iqueue.a: $(OBJ_release)
 	$(AR) rcs $@ $^
@@ -49,10 +55,10 @@ bin/iqueue.a: $(OBJ_release)
 bin/iqueue_debug.a: $(OBJ_debug)
 	$(AR) rcs $@ $^
 
-bin/debug/%.o: src/%.c $(wildcard include/*)
-	@echo $(CC) -c $< -o $@ 
-	@$(CC) $(CFLAGS_debug) -c $< -o $@ 
-
 bin/release/%.o: src/%.c $(wildcard include/*)
-	@echo $(CC) -c $< -o $@ 
-	@$(CC) $(CFLAGS_debug) -c $< -o $@ 
+	@echo $(CC) -c $< -o $@
+	@$(CC) $(CFLAGS_release) -c $< -o $@
+
+bin/debug/%.o: src/%.c $(wildcard include/*)
+	@echo $(CC) -c $< -o $@
+	@$(CC) $(CFLAGS_debug) -c $< -o $@
