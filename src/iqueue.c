@@ -11,8 +11,6 @@
 #define _GNU_SOURCE
 #include "iqueue.h"
 #include <errno.h>
-#include <limits.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -120,13 +118,13 @@ void signal_iqsignal(iqsignal_t * signal)
 
 // === iqueue_t ===
 
-int new_iqueue(/*out*/iqueue_t** queue, size_t size)
+int new_iqueue(/*out*/iqueue_t** queue, uint16_t size)
 {
-   if (size == 0 || size >= (SIZE_MAX - sizeof(iqueue_t)) / sizeof(void*)) {
+   if (size == 0) {
       return EINVAL;
    }
 
-   size_t queuesize = sizeof(iqueue_t) + size * sizeof(void*);
+   size_t queuesize = sizeof(iqueue_t) + (uint32_t)size * sizeof(void*);
    iqueue_t* allocated_queue = (iqueue_t*) malloc(queuesize);
 
    if (!allocated_queue) {
@@ -182,21 +180,29 @@ int delete_iqueue(iqueue_t** queue)
 
 void close_iqueue(iqueue_t* queue)
 {
-   cmpxchg_atomicint(&queue->closed, 0, 1);
+   pthread_mutex_lock(&queue->reader.lock);
+   pthread_mutex_lock(&queue->writer.lock);
+   queue->closed = 1;
+   pthread_mutex_unlock(&queue->writer.lock);
+   pthread_mutex_unlock(&queue->reader.lock);
 
    // Wait until reader/writer woken up
-   while (  0 != cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0)
-            || 0 != cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0)) {
+   for (;;) {
       pthread_mutex_lock(&queue->reader.lock);
       pthread_cond_broadcast(&queue->reader.cond);
+      size_t isreader = queue->reader.waitcount;
       pthread_mutex_unlock(&queue->reader.lock);
 
       pthread_mutex_lock(&queue->writer.lock);
       pthread_cond_broadcast(&queue->writer.cond);
+      size_t iswriter = queue->writer.waitcount;
       pthread_mutex_unlock(&queue->writer.lock);
+
+      if (!isreader && !iswriter) break;
 
       sched_yield();
    }
+
 }
 
 int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
@@ -205,36 +211,36 @@ int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
       return EINVAL;
    }
 
-   size_t newpos;
-   size_t writepos = cmpxchg_atomicsize(&queue->writepos, (size_t)0, (size_t)0);
+   uint32_t oldval = cmpxchg_atomicu32(&queue->next_and_nrofmsg, 0, 0);
 
    for (;;) {
-
       if (queue->closed) {
          return EPIPE;
       }
 
-      newpos = writepos + 1;
-      if (newpos >= queue->size) {
-         newpos = 0;
+      uint16_t next    = (uint16_t) (oldval >> 16);
+      uint16_t nrofmsg = (uint16_t) oldval;
+      unsigned pos = next + (unsigned) nrofmsg;
+      if (pos >= queue->size) {
+         pos -= queue->size;
       }
 
-      if (0 == cmpxchg_atomicptr(
-                  &queue->msg[writepos],
-                  /*old value*/ (void*)0,
-                  /*new value*/ (void*)msg)) {
-         break;
-      }
-
-      if (0 != queue->msg[newpos]) {
+      if (nrofmsg >= queue->size) {
          return EAGAIN;
       }
 
-      size_t oldval = cmpxchg_atomicsize(&queue->writepos, writepos, newpos);
-      writepos = (oldval == writepos) ? newpos : oldval;
-   }
+      ++ nrofmsg;
+      uint32_t newval = ((uint32_t)next << 16) + nrofmsg;
 
-   cmpxchg_atomicsize(&queue->writepos, writepos, newpos);
+      if (0 == cmpxchg_atomicptr(&queue->msg[pos], 0, msg)) {
+         if (oldval == cmpxchg_atomicu32(&queue->next_and_nrofmsg, oldval, newval)) {
+            break;
+         }
+         cmpxchg_atomicptr(&queue->msg[pos], msg, 0);
+      }
+
+      oldval = queue->next_and_nrofmsg;
+   }
 
    if (queue->reader.waitcount) {
       // wake up reader
@@ -246,66 +252,43 @@ int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
    return 0;
 }
 
-int send_iqueue(iqueue_t* queue, iqmsg_t* msg)
-{
-   int err = trysend_iqueue(queue, msg);
-
-   while (err == EAGAIN) {
-      add_atomicsize(&queue->writer.waitcount, 1);
-      pthread_mutex_lock(&queue->writer.lock);
-
-      err = trysend_iqueue(queue, msg);
-
-      if (EAGAIN == err) {
-         pthread_cond_wait(&queue->writer.cond, &queue->writer.lock);
-      }
-
-      pthread_mutex_unlock(&queue->writer.lock);
-      sub_atomicsize(&queue->writer.waitcount, 1);
-
-      if (EAGAIN == err) {
-         err = trysend_iqueue(queue, msg);
-      }
-   }
-
-   return err;
-}
-
 int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
 {
    if (msg == 0) {
       return EINVAL;
    }
 
-   size_t newpos;
-   size_t readpos = cmpxchg_atomicsize(&queue->readpos, (size_t)0, (size_t)0);
+   uint32_t oldval = cmpxchg_atomicu32(&queue->next_and_nrofmsg, 0, 0);
 
    for (;;) {
-
       if (queue->closed) {
          return EPIPE;
       }
 
-      newpos = readpos + 1;
-      if (newpos >= queue->size) {
-         newpos = 0;
+      uint16_t next    = (uint16_t) (oldval >> 16);
+      uint16_t nrofmsg = (uint16_t) oldval;
+      uint16_t pos = next;
+
+      if (!nrofmsg) {
+         return EAGAIN;
       }
 
-      void* fetchedmsg = and_atomicptr(&queue->msg[readpos], 0);
-      if (0 != fetchedmsg) {
+      -- nrofmsg;
+      ++ next;
+      if (next >= queue->size) {
+         next = 0;
+      }
+      uint32_t newval = ((uint32_t)next << 16) + nrofmsg;
+
+      if (oldval == cmpxchg_atomicu32(&queue->next_and_nrofmsg, oldval, newval)) {
+         void* fetchedmsg = queue->msg[pos];
+         cmpxchg_atomicptr(&queue->msg[pos], fetchedmsg, 0);
          *msg = fetchedmsg;
          break;
       }
 
-      if (0 == queue->msg[newpos]) {
-         return EAGAIN;
-      }
-
-      size_t oldval = cmpxchg_atomicsize(&queue->readpos, readpos, newpos);
-      readpos = (oldval == readpos) ? newpos : oldval;
+      oldval = queue->next_and_nrofmsg;
    }
-
-   cmpxchg_atomicsize(&queue->readpos, readpos, newpos);
 
    if (queue->writer.waitcount) {
       // wake up writer
@@ -317,22 +300,49 @@ int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
    return 0;
 }
 
+int send_iqueue(iqueue_t* queue, iqmsg_t* msg)
+{
+   int err = trysend_iqueue(queue, msg);
+
+   while (err == EAGAIN) {
+      pthread_mutex_lock(&queue->writer.lock);
+      ++ queue->writer.waitcount;
+
+      err = trysend_iqueue(queue, msg);
+
+      if (EAGAIN == err) {
+         pthread_cond_wait(&queue->writer.cond, &queue->writer.lock);
+         if (queue->closed) err = EPIPE;
+      }
+
+      -- queue->writer.waitcount;
+      pthread_mutex_unlock(&queue->writer.lock);
+
+      if (EAGAIN == err) {
+         err = trysend_iqueue(queue, msg);
+      }
+   }
+
+   return err;
+}
+
 int recv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
 {
    int err = tryrecv_iqueue(queue, msg);
 
    while (err == EAGAIN) {
-      add_atomicsize(&queue->reader.waitcount, 1);
       pthread_mutex_lock(&queue->reader.lock);
+      ++ queue->reader.waitcount;
 
       err = tryrecv_iqueue(queue, msg);
 
       if (EAGAIN == err) {
          pthread_cond_wait(&queue->reader.cond, &queue->reader.lock);
+         if (queue->closed) err = EPIPE;
       }
 
+      -- queue->reader.waitcount;
       pthread_mutex_unlock(&queue->reader.lock);
-      sub_atomicsize(&queue->reader.waitcount, 1);
 
       if (EAGAIN == err) {
          err = tryrecv_iqueue(queue, msg);
