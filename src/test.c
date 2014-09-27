@@ -336,19 +336,17 @@ static void test_trysend_single(void)
    TEST(0 == delete_iqueue(&queue));
 }
 
-static void* thread_simulate_write(void * param)
+static void* thread_call_send(void * param)
 {
    iqueue_t * queue = param;
 
-   TEST(0 == queue->waitreader);
-   TEST(0 == pthread_mutex_lock(&queue->readlock));
-   size_t pos = queue->readpos;
-   ++ queue->waitreader;
-   TEST(0 == queue->msg[pos]);
-   TEST(0 == pthread_cond_wait(&queue->readcond, &queue->readlock));
-   TEST(0 != queue->msg[pos]);
-   -- queue->waitreader;
-   TEST(0 == pthread_mutex_unlock(&queue->readlock));
+   TEST(0 == queue->waitwriter);
+   TEST(0 == pthread_mutex_lock(&queue->writelock));
+   size_t pos = queue->writepos;
+   iqmsg_t * msg = queue->msg[pos];
+   TEST(0 == pthread_mutex_unlock(&queue->writelock));
+
+   TEST(0 == send_iqueue(queue, msg));
 
    return 0;
 }
@@ -388,33 +386,48 @@ static void test_send_single(void)
    }
    PASS();
 
-   // TODO:
-
-   // TEST trysend_iqueue: wakeup waiting reader
-   memset(queue->msg, 0, sizeof(queue->msg[0]) * queue->size);
+   // TEST send_iqueue: waits (reader is simulated)
    for (unsigned i = 0; i < 10; ++i) {
-      queue->readpos = i;
-      TEST(0 == pthread_create(&thr, 0, &thread_simulate_read, queue));
+      TEST(0 == pthread_create(&thr, 0, &thread_call_send, queue));
+      // simulate wrong wakeup (send does not return)
+      for (int wr = 0; wr <= 5; ++wr) {
+         for (int wc = 0; wc < 10000; ++wc) {
+            sched_yield();
+            if (__sync_fetch_and_add(&queue->waitwriter, 0)) break;
+         }
+         TEST(1 == __sync_fetch_and_add(&queue->waitwriter, 0));
+         if (wr < 5) {
+            TEST(0 == pthread_mutex_lock(&queue->writelock));
+            TEST(0 == pthread_cond_signal(&queue->writecond));
+            TEST(0 == pthread_mutex_unlock(&queue->writelock));
+         }
+         for (int wc = 0; wc < 10000; ++wc) {
+            // woken up
+            if (0 == __sync_fetch_and_add(&queue->waitwriter, 0)) break;
+         }
+      }
+      TEST(1 == __sync_fetch_and_add(&queue->waitwriter, 0));
+      // simulate reader
+      queue->readpos = (i+1) % 10;
+      queue->msg[i] = 0;
+      // wake up writer
+      pthread_mutex_lock(&queue->writelock);
+      pthread_cond_signal(&queue->writecond);
+      pthread_mutex_unlock(&queue->writelock);
       for (int wc = 0; wc < 10000; ++wc) {
          sched_yield();
-         if (__sync_fetch_and_add(&queue->waitreader, 0)) break;
+         if (0 == __sync_fetch_and_add(&queue->waitwriter, 0)) break;
       }
-      TEST(1 == __sync_fetch_and_add(&queue->waitreader, 0));
-      TEST(0 == trysend_iqueue(queue, &msg[i]));
-      for (int wc = 0; wc < 10000; ++wc) {
-         sched_yield();
-         if (0 == __sync_fetch_and_add(&queue->waitreader, 0)) break;
-      }
-      TEST(0 == __sync_fetch_and_add(&queue->waitreader, 0));
+      TEST(0 == __sync_fetch_and_add(&queue->waitwriter, 0));
       TEST(0 == pthread_join(thr, 0));
+      // writer has rewritten msg
+      TEST(queue->writepos == queue->readpos);
+      TEST(&msg[i] == queue->msg[i]);
    }
-   memset(queue->msg, 0, sizeof(queue->msg[0]) * queue->size);
-   queue->readpos = 0;
    PASS();
 
    // unprepare
    TEST(0 == delete_iqueue(&queue));
-
 }
 
 int main(void)
