@@ -1,7 +1,11 @@
 iqueue
 ======
 
-Zero-copy lock-free C implementation of message queue.
+C implementation of interthread message queue.
+
+It is implemented without locks (lock-free)
+except for waiting/blocking functions.
+It is designed to allow for zero-copy message transfer.
 
 ## Client Server Example
 
