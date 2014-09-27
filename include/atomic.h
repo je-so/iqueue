@@ -1,6 +1,6 @@
 /* atomic.h
 
-   Defines atomic operations with help GNU gcc builtin operations.
+   Defines atomic operations with help of GNU gcc builtin operations.
 
    Copyright:
    This program is free software. See accompanying LICENSE file.
