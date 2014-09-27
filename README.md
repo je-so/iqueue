@@ -10,7 +10,7 @@ is not copied.
 The server signals the client when the message is processed.
 Also the client receives an error code as answer from the server.
 
-```
+```c
 #include "iqueue.h"
 #include <stdio.h>
 
