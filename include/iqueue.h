@@ -19,7 +19,7 @@
 typedef struct iqsignal_t {
    pthread_mutex_t lock;
    pthread_cond_t  cond;
-   int signaled;
+   size_t signalcount;
 } iqsignal_t;
 
 typedef struct iqmsg_t {
@@ -72,21 +72,31 @@ int recv_iqueue(iqueue_t * queue, /*out*/iqmsg_t ** msg);
 
 // === iqsignal_t ===
 
+// Initializes new signal synchronization facility.
 int init_iqsignal(/*out*/iqsignal_t * signal);
 
+// Frees resources associated with signal. Make sure that there are no more waiting threads else undefined behaviour.
 int free_iqsignal(iqsignal_t * signal);
 
+// Waits until signalcount_iqsignal(signal) returns != 0.
+// Clears signalcount before return.
 void wait_iqsignal(iqsignal_t * signal);
 
+// Increments signalcount by one and wakes up all threads waiting with wait_iqsignal(signal).
 void signal_iqsignal(iqsignal_t * signal);
 
-int issignaled_iqsignal(iqsignal_t * signal);
+// Returns the how many times signal_iqsignal(signal) was called (Nr of processed messages).
+size_t signalcount_iqsignal(iqsignal_t * signal);
 
 // === iqmsg_t ===
 
+// Static initializer for iqmsg_t. Parameter signal is used by a receiver to signal the message as processed.
+// If you do not want to receive signals set this value to 0.
 #define iqmsg_INIT(signal) \
          { signal, 0 }
 
+// Initializer for msg. Parameter signal is used by a receiver to signal the message as processed.
+// If you do not want to receive signals set this value to 0.
 static inline void init_iqmsg(iqmsg_t * msg, iqsignal_t * signal)
 {
          msg->signal = signal;
