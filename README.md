@@ -10,7 +10,7 @@ is not copied.
 The server signals the client when the message is processed.
 Also the client receives an error code as answer from the server.
 
-```c
+```C
 #include "iqueue.h"
 #include <stdio.h>
 
@@ -20,7 +20,7 @@ struct echomsg_t {
    int err;
 };
 
-void* server(void * queue)
+void* server(void* queue)
 {
    iqmsg_t* msg = 0;
    while (0 == recv_iqueue(queue, &msg)) {
@@ -28,12 +28,12 @@ void* server(void * queue)
       // set return value (no error)
       ((struct echomsg_t*)msg)->err = 0;
       // signal client it is safe to delete msg
-      setprocessed_iqmsg(msg); 
+      setprocessed_iqmsg(msg);
    }
    return 0;
 }
 
-void* client(void * queue)
+void* client(void* queue)
 {
    iqsignal_t signal;
    struct echomsg_t msg = { iqmsg_INIT(&signal), "Hello Server", 1 };
