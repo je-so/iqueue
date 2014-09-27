@@ -3,8 +3,8 @@
 
 struct echomsg_t {
    iqmsg_t header;
-   const char* str;
-   int err;
+   const char* str; // in param
+   int err;         // out param
 };
 
 void* server(void* queue)
