@@ -60,7 +60,7 @@ int main(void)
 ## Example with Busy Waiting
 
 A queue with size 3 is created. The client pushes 3 messages into the queue without waiting.
-The client waits in a busy loop until all messages has been processed. 
+The client waits in a busy loop until all messages has been processed.
 It checks the results and exits.
 
 ```C
