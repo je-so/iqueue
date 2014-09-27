@@ -291,7 +291,7 @@ int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
          newpos = 0;
       }
 
-      void* fetchedmsg = __sync_fetch_and_and(&queue->msg[readpos], 0);
+      void* fetchedmsg = and_atomicptr(&queue->msg[readpos], 0);
       if (0 != fetchedmsg) {
          *msg = fetchedmsg;
          break;
