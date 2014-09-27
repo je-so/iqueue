@@ -157,15 +157,15 @@ static void* thr_lock(void * param)
 {
    iqueue_t* queue = param;
 
-   TEST(0 == pthread_mutex_lock(&queue->writelock));
+   TEST(0 == pthread_mutex_lock(&queue->writer.lock));
    __sync_val_compare_and_swap(&queue->closed, 0, 1);
-   TEST(0 == pthread_cond_wait(&queue->writecond, &queue->writelock));
-   TEST(0 == pthread_mutex_unlock(&queue->writelock));
+   TEST(0 == pthread_cond_wait(&queue->writer.cond, &queue->writer.lock));
+   TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
 
-   TEST(0 == pthread_mutex_lock(&queue->readlock));
+   TEST(0 == pthread_mutex_lock(&queue->reader.lock));
    __sync_val_compare_and_swap(&queue->closed, 1, 2);
-   TEST(0 == pthread_cond_wait(&queue->readcond, &queue->readlock));
-   TEST(0 == pthread_mutex_unlock(&queue->readlock));
+   TEST(0 == pthread_cond_wait(&queue->reader.cond, &queue->reader.lock));
+   TEST(0 == pthread_mutex_unlock(&queue->reader.lock));
    __sync_val_compare_and_swap(&queue->closed, 2, 3);
 
    return 0;
@@ -182,8 +182,8 @@ static void test_initfree(void)
    TEST(12345 == queue->size);
    TEST(0 == queue->readpos);
    TEST(0 == queue->writepos);
-   TEST(0 == queue->waitreader);
-   TEST(0 == queue->waitwriter);
+   TEST(0 == queue->reader.waitcount);
+   TEST(0 == queue->writer.waitcount);
    TEST(0 == queue->closed);
    for (size_t i = 0; i < queue->size; ++i) {
       TEST(0 == queue->msg[i]);
@@ -196,26 +196,26 @@ static void test_initfree(void)
    }
    // thr_lock is waiting on writecond
    TEST(1 == __sync_val_compare_and_swap(&queue->closed, 0, 0));
-   TEST(0 == pthread_mutex_lock(&queue->writelock));
-   TEST(0 == pthread_cond_signal(&queue->writecond));
+   TEST(0 == pthread_mutex_lock(&queue->writer.lock));
+   TEST(0 == pthread_cond_signal(&queue->writer.cond));
    for (int i = 0; i < 10; ++i) {
       sched_yield();
       TEST(1 == __sync_val_compare_and_swap(&queue->closed, 0, 0));
    }
-   TEST(0 == pthread_mutex_unlock(&queue->writelock));
+   TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
    for (int i = 0; i < 10000; ++i) {
       if (1 != __sync_val_compare_and_swap(&queue->closed, 0, 0)) break;
       sched_yield();
    }
    // thr_lock is waiting on readcond
    TEST(2 == __sync_val_compare_and_swap(&queue->closed, 0, 0));
-   TEST(0 == pthread_mutex_lock(&queue->readlock));
-   TEST(0 == pthread_cond_signal(&queue->readcond));
+   TEST(0 == pthread_mutex_lock(&queue->reader.lock));
+   TEST(0 == pthread_cond_signal(&queue->reader.cond));
    for (int i = 0; i < 10; ++i) {
       sched_yield();
       TEST(2 == __sync_val_compare_and_swap(&queue->closed, 0, 0));
    }
-   TEST(0 == pthread_mutex_unlock(&queue->readlock));
+   TEST(0 == pthread_mutex_unlock(&queue->reader.lock));
    TEST(0 == pthread_join(thr, 0));
    TEST(3 == __sync_val_compare_and_swap(&queue->closed, 0, 0));
    PASS();
@@ -232,8 +232,8 @@ static void test_initfree(void)
       TEST(s == queue->size);
       TEST(0 == queue->readpos);
       TEST(0 == queue->writepos);
-      TEST(0 == queue->waitreader);
-      TEST(0 == queue->waitwriter);
+      TEST(0 == queue->reader.waitcount);
+      TEST(0 == queue->writer.waitcount);
       TEST(0 == queue->closed);
       for (size_t i = 0; i < queue->size; ++i) {
          TEST(0 == queue->msg[i]);
@@ -257,15 +257,15 @@ static void* thread_simulate_read(void * param)
 {
    iqueue_t * queue = param;
 
-   TEST(0 == queue->waitreader);
-   TEST(0 == pthread_mutex_lock(&queue->readlock));
+   TEST(0 == queue->reader.waitcount);
+   TEST(0 == pthread_mutex_lock(&queue->reader.lock));
    size_t pos = queue->readpos;
-   ++ queue->waitreader;
+   ++ queue->reader.waitcount;
    TEST(0 == queue->msg[pos]);
-   TEST(0 == pthread_cond_wait(&queue->readcond, &queue->readlock));
+   TEST(0 == pthread_cond_wait(&queue->reader.cond, &queue->reader.lock));
    TEST(0 != queue->msg[pos]);
-   -- queue->waitreader;
-   TEST(0 == pthread_mutex_unlock(&queue->readlock));
+   -- queue->reader.waitcount;
+   TEST(0 == pthread_mutex_unlock(&queue->reader.lock));
 
    return 0;
 }
@@ -298,8 +298,8 @@ static void test_trysend_single(void)
       TEST(10 == queue->size);
       TEST(0 == queue->readpos);
       TEST(n == queue->writepos);
-      TEST(0 == queue->waitreader);
-      TEST(0 == queue->waitwriter);
+      TEST(0 == queue->reader.waitcount);
+      TEST(0 == queue->writer.waitcount);
       TEST(0 == queue->closed);
       TEST(&msg[i] == queue->msg[i]);
    }
@@ -318,15 +318,15 @@ static void test_trysend_single(void)
       TEST(0 == pthread_create(&thr, 0, &thread_simulate_read, queue));
       for (int wc = 0; wc < 10000; ++wc) {
          sched_yield();
-         if (__sync_fetch_and_add(&queue->waitreader, 0)) break;
+         if (__sync_fetch_and_add(&queue->reader.waitcount, 0)) break;
       }
-      TEST(1 == __sync_fetch_and_add(&queue->waitreader, 0));
+      TEST(1 == __sync_fetch_and_add(&queue->reader.waitcount, 0));
       TEST(0 == trysend_iqueue(queue, &msg[i]));
       for (int wc = 0; wc < 10000; ++wc) {
          sched_yield();
-         if (0 == __sync_fetch_and_add(&queue->waitreader, 0)) break;
+         if (0 == __sync_fetch_and_add(&queue->reader.waitcount, 0)) break;
       }
-      TEST(0 == __sync_fetch_and_add(&queue->waitreader, 0));
+      TEST(0 == __sync_fetch_and_add(&queue->reader.waitcount, 0));
       TEST(0 == pthread_join(thr, 0));
    }
    memset(queue->msg, 0, sizeof(queue->msg[0]) * queue->size);
@@ -341,11 +341,11 @@ static void* thread_call_send(void * param)
 {
    iqueue_t * queue = param;
 
-   TEST(0 == queue->waitwriter);
-   TEST(0 == pthread_mutex_lock(&queue->writelock));
+   TEST(0 == queue->writer.waitcount);
+   TEST(0 == pthread_mutex_lock(&queue->writer.lock));
    size_t pos = queue->writepos;
    iqmsg_t * msg = queue->msg[pos];
-   TEST(0 == pthread_mutex_unlock(&queue->writelock));
+   TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
 
    TEST(0 == send_iqueue(queue, msg));
 
@@ -380,8 +380,8 @@ static void test_send_single(void)
       TEST(10 == queue->size);
       TEST(0 == queue->readpos);
       TEST(n == queue->writepos);
-      TEST(0 == queue->waitreader);
-      TEST(0 == queue->waitwriter);
+      TEST(0 == queue->reader.waitcount);
+      TEST(0 == queue->writer.waitcount);
       TEST(0 == queue->closed);
       TEST(&msg[i] == queue->msg[i]);
    }
@@ -394,32 +394,32 @@ static void test_send_single(void)
       for (int wr = 0; wr <= 5; ++wr) {
          for (int wc = 0; wc < 10000; ++wc) {
             sched_yield();
-            if (__sync_fetch_and_add(&queue->waitwriter, 0)) break;
+            if (__sync_fetch_and_add(&queue->writer.waitcount, 0)) break;
          }
-         TEST(1 == __sync_fetch_and_add(&queue->waitwriter, 0));
+         TEST(1 == __sync_fetch_and_add(&queue->writer.waitcount, 0));
          if (wr < 5) {
-            TEST(0 == pthread_mutex_lock(&queue->writelock));
-            TEST(0 == pthread_cond_signal(&queue->writecond));
-            TEST(0 == pthread_mutex_unlock(&queue->writelock));
-         }
-         for (int wc = 0; wc < 10000; ++wc) {
-            // woken up
-            if (0 == __sync_fetch_and_add(&queue->waitwriter, 0)) break;
+            TEST(0 == pthread_mutex_lock(&queue->writer.lock));
+            TEST(0 == pthread_cond_signal(&queue->writer.cond));
+            TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
+            for (int wc = 0; wc < 10000; ++wc) {
+               // woken up
+               if (0 == __sync_fetch_and_add(&queue->writer.waitcount, 0)) break;
+            }
          }
       }
-      TEST(1 == __sync_fetch_and_add(&queue->waitwriter, 0));
+      TEST(1 == __sync_fetch_and_add(&queue->writer.waitcount, 0));
       // simulate reader
       queue->readpos = (i+1) % 10;
       queue->msg[i] = 0;
       // wake up writer
-      pthread_mutex_lock(&queue->writelock);
-      pthread_cond_signal(&queue->writecond);
-      pthread_mutex_unlock(&queue->writelock);
+      pthread_mutex_lock(&queue->writer.lock);
+      pthread_cond_signal(&queue->writer.cond);
+      pthread_mutex_unlock(&queue->writer.lock);
       for (int wc = 0; wc < 10000; ++wc) {
          sched_yield();
-         if (0 == __sync_fetch_and_add(&queue->waitwriter, 0)) break;
+         if (0 == __sync_fetch_and_add(&queue->writer.waitcount, 0)) break;
       }
-      TEST(0 == __sync_fetch_and_add(&queue->waitwriter, 0));
+      TEST(0 == __sync_fetch_and_add(&queue->writer.waitcount, 0));
       TEST(0 == pthread_join(thr, 0));
       // writer has rewritten msg
       TEST(queue->writepos == queue->readpos);
@@ -464,8 +464,8 @@ static void test_tryrecv_single(void)
       TEST(10 == queue->size);
       TEST(n == queue->readpos);
       TEST(0 == queue->writepos);
-      TEST(0 == queue->waitreader);
-      TEST(0 == queue->waitwriter);
+      TEST(0 == queue->reader.waitcount);
+      TEST(0 == queue->writer.waitcount);
       TEST(0 == queue->closed);
       TEST(0 == queue->msg[i]);
    }
@@ -486,16 +486,16 @@ static void test_tryrecv_single(void)
       TEST(0 == pthread_create(&thr, 0, &thread_call_send, queue));
       for (int wc = 0; wc < 10000; ++wc) {
          sched_yield();
-         if (__sync_fetch_and_add(&queue->waitwriter, 0)) break;
+         if (__sync_fetch_and_add(&queue->writer.waitcount, 0)) break;
       }
-      TEST(1 == __sync_fetch_and_add(&queue->waitwriter, 0));
+      TEST(1 == __sync_fetch_and_add(&queue->writer.waitcount, 0));
       TEST(0 == tryrecv_iqueue(queue, &rcv));
       TEST(rcv == &msg[i]);
       for (int wc = 0; wc < 10000; ++wc) {
          sched_yield();
-         if (0 == __sync_fetch_and_add(&queue->waitwriter, 0)) break;
+         if (0 == __sync_fetch_and_add(&queue->writer.waitcount, 0)) break;
       }
-      TEST(0 == __sync_fetch_and_add(&queue->waitwriter, 0));
+      TEST(0 == __sync_fetch_and_add(&queue->writer.waitcount, 0));
       TEST(0 == pthread_join(thr, 0));
    }
    PASS();
@@ -508,7 +508,7 @@ static void* thread_call_recv(void * param)
 {
    iqueue_t * queue = param;
 
-   TEST(0 == queue->waitreader);
+   TEST(0 == queue->reader.waitcount);
    iqmsg_t * rcv = 0;
    TEST(0 == recv_iqueue(queue, &rcv));
    TEST(0 != rcv);
@@ -549,8 +549,8 @@ static void test_recv_single(void)
       TEST(10 == queue->size);
       TEST(n == queue->readpos);
       TEST(0 == queue->writepos);
-      TEST(0 == queue->waitreader);
-      TEST(0 == queue->waitwriter);
+      TEST(0 == queue->reader.waitcount);
+      TEST(0 == queue->writer.waitcount);
       TEST(0 == queue->closed);
       TEST(0 == queue->msg[i]);
    }
@@ -563,32 +563,32 @@ static void test_recv_single(void)
       for (int wr = 0; wr <= 5; ++wr) {
          for (int wc = 0; wc < 10000; ++wc) {
             sched_yield();
-            if (__sync_fetch_and_add(&queue->waitreader, 0)) break;
+            if (__sync_fetch_and_add(&queue->reader.waitcount, 0)) break;
          }
-         TEST(1 == __sync_fetch_and_add(&queue->waitreader, 0));
+         TEST(1 == __sync_fetch_and_add(&queue->reader.waitcount, 0));
          if (wr < 5) {
-            TEST(0 == pthread_mutex_lock(&queue->readlock));
-            TEST(0 == pthread_cond_signal(&queue->readcond));
-            TEST(0 == pthread_mutex_unlock(&queue->readlock));
-         }
-         for (int wc = 0; wc < 10000; ++wc) {
-            // woken up
-            if (0 == __sync_fetch_and_add(&queue->waitreader, 0)) break;
+            TEST(0 == pthread_mutex_lock(&queue->reader.lock));
+            TEST(0 == pthread_cond_signal(&queue->reader.cond));
+            TEST(0 == pthread_mutex_unlock(&queue->reader.lock));
+            for (int wc = 0; wc < 10000; ++wc) {
+               // woken up
+               if (0 == __sync_fetch_and_add(&queue->reader.waitcount, 0)) break;
+            }
          }
       }
-      TEST(1 == __sync_fetch_and_add(&queue->waitreader, 0));
+      TEST(1 == __sync_fetch_and_add(&queue->reader.waitcount, 0));
       // simulate writer
       queue->writepos = (i+1) % 10;
       queue->msg[i] = &msg[i];
       // wake up reader
-      pthread_mutex_lock(&queue->readlock);
-      pthread_cond_signal(&queue->readcond);
-      pthread_mutex_unlock(&queue->readlock);
+      pthread_mutex_lock(&queue->reader.lock);
+      pthread_cond_signal(&queue->reader.cond);
+      pthread_mutex_unlock(&queue->reader.lock);
       for (int wc = 0; wc < 10000; ++wc) {
          sched_yield();
-         if (0 == __sync_fetch_and_add(&queue->waitreader, 0)) break;
+         if (0 == __sync_fetch_and_add(&queue->reader.waitcount, 0)) break;
       }
-      TEST(0 == __sync_fetch_and_add(&queue->waitreader, 0));
+      TEST(0 == __sync_fetch_and_add(&queue->reader.waitcount, 0));
       TEST(0 == pthread_join(thr, 0));
       // reader has removed msg
       TEST(queue->writepos == queue->readpos);
