@@ -611,26 +611,107 @@ static void test_recv_single(void)
    TEST(0 == delete_iqueue(&queue));
 }
 
+static void* thread_epipe_send(void * queue)
+{
+   iqmsg_t msg;
+   int err = send_iqueue(queue, &msg);
+   if (err != EPIPE) {
+      printf("wrong err = %d\n", err);
+   }
+   TEST(EPIPE == err);
+   return 0;
+}
+
+static void* thread_epipe_recv(void * queue)
+{
+   iqmsg_t* msg = 0;
+   int err = recv_iqueue(queue, &msg);
+   if (err != EPIPE) {
+      printf("wrong err = %d\n", err);
+   }
+   TEST(EPIPE == err);
+   return 0;
+}
+
 static void test_close(void)
 {
    iqueue_t * queue = 0;
+   iqmsg_t    msg;
+   pthread_t  thr[100];
 
    // prepare
+
+   // TEST close_iqueue: sets closed
    TEST(0 == new_iqueue(&queue, 1));
+   close_iqueue(queue);
+   TEST(1 == queue->closed);
+   TEST(0 == delete_iqueue(&queue));
+   PASS();
 
    // TEST close_iqueue: wakes up waiting reader and writer
-   // TODO: close_iqueue()
-
-   // TODO:
-
    // prepare
-   TEST(0 == delete_iqueue(&queue));
    TEST(0 == new_iqueue(&queue, 1));
+   TEST(0 == send_iqueue(queue, &msg));
+   for (unsigned i = 0; i < 50; ++i) {
+      TEST(0 == pthread_create(&thr[i], 0, &thread_epipe_send, queue));
+      for (int wc = 0; wc < 10000; ++wc) {   // wait until started
+         sched_yield();
+         if (i+1 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0)) break;
+      }
+   }
+   sched_yield();
+   TEST(50 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0));
+   queue->msg[0] = 0; // simulate reading msg without signalling waiting writers
+   TEST(50 == cmpxchg_atomicsize(&queue->writer.waitcount, 50, 0));
+   for (int i = 0; i < 50; ++i) {
+      TEST(0 == pthread_create(&thr[50+i], 0, &thread_epipe_recv, queue));
+   }
+   for (int i = 0; i < 10000; ++i) {   // wait until all threads wait
+      sched_yield();
+      if (50 == cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0)) break;
+   }
+   // test
+   TEST(50 == cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0));
+   TEST(0 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 50));
+   close_iqueue(queue);
+   TEST(0 == queue->reader.waitcount);
+   TEST(0 == queue->writer.waitcount);
+   for (int i = 0; i < 100; ++i) {
+      TEST(0 == pthread_join(thr[i], 0));
+   }
+   TEST(0 == delete_iqueue(&queue));
+   PASS();
 
    // TEST delete_iqueue: wakes up waiting reader and writer
+   // prepare
+   TEST(0 == new_iqueue(&queue, 1));
+   TEST(0 == send_iqueue(queue, &msg));
+   for (unsigned i = 0; i < 50; ++i) {
+      TEST(0 == pthread_create(&thr[i], 0, &thread_epipe_send, queue));
+      for (int wc = 0; wc < 10000; ++wc) {   // wait until started
+         sched_yield();
+         if (i+1 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0)) break;
+      }
+   }
+   sched_yield();
+   TEST(50 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0));
+   queue->msg[0] = 0; // simulate readin of msg without signalling waiting writers
+   TEST(50 == cmpxchg_atomicsize(&queue->writer.waitcount, 50, 0));
+   for (int i = 0; i < 50; ++i) {
+      TEST(0 == pthread_create(&thr[50+i], 0, &thread_epipe_recv, queue));
+   }
+   for (int i = 0; i < 10000; ++i) {   // wait until all threads wait
+      sched_yield();
+      if (50 == cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0)) break;
+   }
+   // test
+   TEST(50 == cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0));
+   TEST(0 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 50));
    TEST(0 == delete_iqueue(&queue));
-   // TODO:
-
+   for (int i = 0; i < 100; ++i) {
+      TEST(0 == pthread_join(thr[i], 0));
+   }
+   PASS();
 }
 
 int main(void)
