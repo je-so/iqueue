@@ -6,7 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int init_mutex(/*out*/pthread_mutex_t * mutex)
+// === iqsignal0_t ===
+
+static int init_mutex(/*out*/pthread_mutex_t* mutex)
 {
    int err;
    pthread_mutexattr_t attr;
@@ -25,7 +27,7 @@ static int init_mutex(/*out*/pthread_mutex_t * mutex)
    return err;
 }
 
-static int init_cond(/*out*/pthread_cond_t * cond)
+static int init_cond(/*out*/pthread_cond_t* cond)
 {
    int err;
 
@@ -34,7 +36,7 @@ static int init_cond(/*out*/pthread_cond_t * cond)
    return err;
 }
 
-int init_iqsignal(/*out*/iqsignal_t * signal)
+int init_iqsignal0(/*out*/iqsignal0_t* signal)
 {
    int err;
 
@@ -46,10 +48,12 @@ int init_iqsignal(/*out*/iqsignal_t * signal)
       (void) pthread_mutex_destroy(&signal->lock);
    }
 
+   signal->waitcount = 0;
+
    return err;
 }
 
-int free_iqsignal(iqsignal_t * signal)
+int free_iqsignal0(iqsignal0_t* signal)
 {
    int err = pthread_mutex_destroy(&signal->lock);
    int err2 = pthread_cond_destroy(&signal->cond);
@@ -59,49 +63,72 @@ int free_iqsignal(iqsignal_t * signal)
    return err;
 }
 
+// === iqsignal_t ===
+
+int init_iqsignal(/*out*/iqsignal_t* signal)
+{
+   int err;
+
+   err = init_iqsignal0(&signal->sign0);
+   if (err) return err;
+
+   signal->signalcount = 0;
+
+   return err;
+}
+
+int free_iqsignal(iqsignal_t* signal)
+{
+   int err = free_iqsignal0(&signal->sign0);
+   return err;
+}
+
 void wait_iqsignal(iqsignal_t * signal)
 {
-   pthread_mutex_lock(&signal->lock);
+   pthread_mutex_lock(&signal->sign0.lock);
 
    if (! signal->signalcount) {
-      pthread_cond_wait(&signal->cond, &signal->lock);
+      ++ signal->sign0.waitcount;
+      pthread_cond_wait(&signal->sign0.cond, &signal->sign0.lock);
+      -- signal->sign0.waitcount;
    }
 
    signal->signalcount = 0;
 
-   pthread_mutex_unlock(&signal->lock);
+   pthread_mutex_unlock(&signal->sign0.lock);
 }
 
 void signal_iqsignal(iqsignal_t * signal)
 {
-   pthread_mutex_lock(&signal->lock);
+   pthread_mutex_lock(&signal->sign0.lock);
 
    ++ signal->signalcount;
-   pthread_cond_broadcast(&signal->cond);
+   pthread_cond_broadcast(&signal->sign0.cond);
 
-   pthread_mutex_unlock(&signal->lock);
+   pthread_mutex_unlock(&signal->sign0.lock);
 }
 
-size_t signalcount_iqsignal(iqsignal_t * signal)
+size_t signalcount_iqsignal(iqsignal_t* signal)
 {
-   pthread_mutex_lock(&signal->lock);
+   pthread_mutex_lock(&signal->sign0.lock);
 
    size_t signalcount = signal->signalcount;
 
-   pthread_mutex_unlock(&signal->lock);
+   pthread_mutex_unlock(&signal->sign0.lock);
 
    return signalcount;
 }
 
+// === iqueue_t ===
 
-int new_iqueue(/*out*/iqueue_t ** queue, size_t size)
+int new_iqueue(/*out*/iqueue_t** queue, size_t size)
 {
    if (size == 0 || size >= (SIZE_MAX - sizeof(iqueue_t)) / sizeof(void*)) {
       return EINVAL;
    }
 
    size_t queuesize = sizeof(iqueue_t) + size * sizeof(void*);
-   iqueue_t * allocated_queue = (iqueue_t*) malloc(queuesize);
+   iqueue_t* allocated_queue = (iqueue_t*) malloc(queuesize);
 
    if (!allocated_queue) {
       return ENOMEM;
@@ -113,37 +140,27 @@ int new_iqueue(/*out*/iqueue_t ** queue, size_t size)
    int err;
    int initcount = 0;
 
-   err = init_mutex(&allocated_queue->readlock);
+   err = init_iqsignal0(&allocated_queue->reader);
    if (err) goto ONERR;
    initcount = 1;
 
-   err = init_mutex(&allocated_queue->writelock);
+   err = init_iqsignal0(&allocated_queue->writer);
    if (err) goto ONERR;
-   initcount = 2;
-
-   err = init_cond(&allocated_queue->readcond);
-   if (err) goto ONERR;
-   initcount = 3;
-
-   err = init_cond(&allocated_queue->writecond);
-   if (err) goto ONERR;
-   // initcount = 4;
+   // initcount = 2;
 
    *queue = allocated_queue;
 
    return 0; /*OK*/
 ONERR:
    switch (initcount) {
-   case 3: pthread_cond_destroy(&allocated_queue->readcond);
-   case 2: pthread_mutex_destroy(&allocated_queue->writelock);
-   case 1: pthread_mutex_destroy(&allocated_queue->readlock);
+   case 1: free_iqsignal0(&allocated_queue->reader);
    case 0: break;
    }
    free(allocated_queue);
    return err;
 }
 
-int delete_iqueue(iqueue_t ** queue)
+int delete_iqueue(iqueue_t** queue)
 {
    int err = 0;
    int err2;
@@ -152,12 +169,8 @@ int delete_iqueue(iqueue_t ** queue)
 
       close_iqueue(*queue);
 
-      err = pthread_cond_destroy(&(*queue)->writecond);
-      err2 = pthread_cond_destroy(&(*queue)->readcond);
-      if (err2) err = err2;
-      err2 = pthread_mutex_destroy(&(*queue)->readlock);
-      if (err2) err = err2;
-      err2 = pthread_mutex_destroy(&(*queue)->writelock);
+      err = free_iqsignal0(&(*queue)->writer);
+      err2 = free_iqsignal0(&(*queue)->reader);
       if (err2) err = err2;
 
       free(*queue);
@@ -168,26 +181,26 @@ int delete_iqueue(iqueue_t ** queue)
    return err;
 }
 
-void close_iqueue(iqueue_t * queue)
+void close_iqueue(iqueue_t* queue)
 {
    __sync_val_compare_and_swap(&queue->closed, 0, 1);
 
    // Wait until reader/writer woken up
-   while (  0 != __sync_val_compare_and_swap(&queue->waitreader, 0, 0)
-            || 0 != __sync_val_compare_and_swap(&queue->waitwriter, 0, 0)) {
-      pthread_mutex_lock(&queue->readlock);
-      pthread_cond_broadcast(&queue->readcond);
-      pthread_mutex_unlock(&queue->readlock);
+   while (  0 != __sync_val_compare_and_swap(&queue->reader.waitcount, 0, 0)
+            || 0 != __sync_val_compare_and_swap(&queue->writer.waitcount, 0, 0)) {
+      pthread_mutex_lock(&queue->reader.lock);
+      pthread_cond_broadcast(&queue->reader.cond);
+      pthread_mutex_unlock(&queue->reader.lock);
 
-      pthread_mutex_lock(&queue->writelock);
-      pthread_cond_broadcast(&queue->writecond);
-      pthread_mutex_unlock(&queue->writelock);
+      pthread_mutex_lock(&queue->writer.lock);
+      pthread_cond_broadcast(&queue->writer.cond);
+      pthread_mutex_unlock(&queue->writer.lock);
 
       sched_yield();
    }
 }
 
-int trysend_iqueue(iqueue_t * queue, iqmsg_t * msg)
+int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
 {
    if (msg == 0) {
       return EINVAL;
@@ -224,32 +237,32 @@ int trysend_iqueue(iqueue_t * queue, iqmsg_t * msg)
 
    __sync_val_compare_and_swap(&queue->writepos, writepos, newpos);
 
-   if (queue->waitreader) {
+   if (queue->reader.waitcount) {
       // wake up reader
-      pthread_mutex_lock(&queue->readlock);
-      pthread_cond_signal(&queue->readcond);
-      pthread_mutex_unlock(&queue->readlock);
+      pthread_mutex_lock(&queue->reader.lock);
+      pthread_cond_signal(&queue->reader.cond);
+      pthread_mutex_unlock(&queue->reader.lock);
    }
 
    return 0;
 }
 
-int send_iqueue(iqueue_t * queue, iqmsg_t * msg)
+int send_iqueue(iqueue_t* queue, iqmsg_t* msg)
 {
    int err = trysend_iqueue(queue, msg);
 
    while (err == EAGAIN) {
-      __sync_fetch_and_add(&queue->waitwriter, 1);
-      pthread_mutex_lock(&queue->writelock);
+      __sync_fetch_and_add(&queue->writer.waitcount, 1);
+      pthread_mutex_lock(&queue->writer.lock);
 
       err = trysend_iqueue(queue, msg);
 
       if (EAGAIN == err) {
-         pthread_cond_wait(&queue->writecond, &queue->writelock);
+         pthread_cond_wait(&queue->writer.cond, &queue->writer.lock);
       }
 
-      pthread_mutex_unlock(&queue->writelock);
-      __sync_fetch_and_sub(&queue->waitwriter, 1);
+      pthread_mutex_unlock(&queue->writer.lock);
+      __sync_fetch_and_sub(&queue->writer.waitcount, 1);
 
       if (EAGAIN == err) {
          err = trysend_iqueue(queue, msg);
@@ -259,7 +272,7 @@ int send_iqueue(iqueue_t * queue, iqmsg_t * msg)
    return err;
 }
 
-int tryrecv_iqueue(iqueue_t * queue, /*out*/iqmsg_t ** msg)
+int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
 {
    if (msg == 0) {
       return EINVAL;
@@ -279,7 +292,7 @@ int tryrecv_iqueue(iqueue_t * queue, /*out*/iqmsg_t ** msg)
          newpos = 0;
       }
 
-      void * fetchedmsg = __sync_fetch_and_and(&queue->msg[readpos], 0);
+      void* fetchedmsg = __sync_fetch_and_and(&queue->msg[readpos], 0);
       if (0 != fetchedmsg) {
          *msg = fetchedmsg;
          break;
@@ -295,32 +308,32 @@ int tryrecv_iqueue(iqueue_t * queue, /*out*/iqmsg_t ** msg)
 
    __sync_val_compare_and_swap(&queue->readpos, readpos, newpos);
 
-   if (queue->waitwriter) {
+   if (queue->writer.waitcount) {
       // wake up writer
-      pthread_mutex_lock(&queue->writelock);
-      pthread_cond_signal(&queue->writecond);
-      pthread_mutex_unlock(&queue->writelock);
+      pthread_mutex_lock(&queue->writer.lock);
+      pthread_cond_signal(&queue->writer.cond);
+      pthread_mutex_unlock(&queue->writer.lock);
    }
 
    return 0;
 }
 
-int recv_iqueue(iqueue_t * queue, /*out*/iqmsg_t ** msg)
+int recv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
 {
    int err = tryrecv_iqueue(queue, msg);
 
    while (err == EAGAIN) {
-      __sync_fetch_and_add(&queue->waitreader, 1);
-      pthread_mutex_lock(&queue->readlock);
+      __sync_fetch_and_add(&queue->reader.waitcount, 1);
+      pthread_mutex_lock(&queue->reader.lock);
 
       err = tryrecv_iqueue(queue, msg);
 
       if (EAGAIN == err) {
-         pthread_cond_wait(&queue->readcond, &queue->readlock);
+         pthread_cond_wait(&queue->reader.cond, &queue->reader.lock);
       }
 
-      pthread_mutex_unlock(&queue->readlock);
-      __sync_fetch_and_sub(&queue->waitreader, 1);
+      pthread_mutex_unlock(&queue->reader.lock);
+      __sync_fetch_and_sub(&queue->reader.waitcount, 1);
 
       if (EAGAIN == err) {
          err = tryrecv_iqueue(queue, msg);
