@@ -81,8 +81,10 @@ int init_iqsignal(/*out*/iqsignal_t* signal);
 int free_iqsignal(iqsignal_t* signal);
 
 // Waits until signalcount_iqsignal(signal) returns != 0.
-// Clears signalcount before return.
 void wait_iqsignal(iqsignal_t* signal);
+
+// Clears signalcount to 0 and returns previous value
+uint32_t clearsignal_iqsignal(iqsignal_t * signal);
 
 // Increments signalcount by one and wakes up all threads waiting with wait_iqsignal(signal).
 void signal_iqsignal(iqsignal_t* signal);
