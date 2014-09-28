@@ -631,8 +631,6 @@ static void test_close(void)
    iqmsg_t   msg;
    pthread_t thr[100];
 
-   // prepare
-
    // TEST close_iqueue: sets closed
    TEST(0 == new_iqueue(&queue, 1));
    close_iqueue(queue);
@@ -981,6 +979,94 @@ void test_multi_send(void)
    }
 }
 
+void* thread_sendiqmsg(void* queue)
+{
+   uint32_t maxrange = MAXRANGE / (s_threadtry ? 1 : 10);
+   iqsignal_t signal;
+   iqmsg_t  msg[1000];
+
+   TEST(0 == init_iqsignal(&signal));
+
+   for (uint32_t nr = 0; nr < maxrange; ) {
+      for (unsigned m = 0; m < 1000; ++m, ++nr) {
+         init_iqmsg(&msg[m], &signal);
+         for (int i = 0; ; ++i) {
+            int err = s_threadtry ? trysend_iqueue(queue, (iqmsg_t*) &msg[m]) : send_iqueue(queue, (iqmsg_t*) &msg[m]);
+            if (err == 0) break;
+            TEST(s_threadtry && err == EAGAIN);
+            sched_yield();
+            if (i == 1000000) {
+               printf("Sender starvation\n");
+               exit(1);
+            }
+         }
+      }
+      while (1000 != signalcount_iqsignal(&signal)) {
+         sched_yield();
+      }
+      for (unsigned m = 0; m < 1000; ++m) {
+         TEST(msg[m].processed == 1);
+      }
+      clearsignal_iqsignal(&signal);
+   }
+
+   return 0;
+}
+
+void* thread_recviqmsg(void* queue)
+{
+   void*    msg;
+
+   for (;;) {
+      for (int i = 0; ; ++i) {
+         int err = s_threadtry ? tryrecv_iqueue(queue, &msg) : recv_iqueue(queue, &msg);
+         if (err == 0) break;
+         if (err == EPIPE) return 0;
+         TEST(err == EAGAIN);
+         sched_yield();
+         if (i == 1000000) {
+            printf("Receiver starvation\n");
+            exit(1);
+         }
+      }
+
+      iqmsg_t* iqmsg = msg;
+      TEST(0 == iqmsg->processed);
+      TEST(0 != iqmsg->signal);
+      setprocessed_iqmsg(iqmsg);
+   }
+
+   return 0;
+}
+
+void test_multi_recv(void)
+{
+   iqueue_t* queue = 0;
+   pthread_t rthr[MAXTHREAD/2];
+   pthread_t sthr[MAXTHREAD/2];
+
+   for (int usetry = 0; usetry <= 1; ++usetry) {
+      // start threads
+      s_threadtry = usetry;
+      TEST(0 == new_iqueue(&queue, QUEUESIZE));
+      for (int i = 0; i < MAXTHREAD/2; ++i) {
+         TEST(0 == pthread_create(&sthr[i], 0, &thread_sendiqmsg, queue));
+         TEST(0 == pthread_create(&rthr[i], 0, &thread_recviqmsg, queue));
+      }
+
+      // stop threads
+      for (int i = 0; i < MAXTHREAD/2; ++i) {
+         TEST(0 == pthread_join(sthr[i], 0));
+      }
+      close_iqueue(queue);
+      for (int i = 0; i < MAXTHREAD/2; ++i) {
+         TEST(0 == pthread_join(rthr[i], 0));
+      }
+      TEST(0 == delete_iqueue(&queue));
+      PASS();
+   }
+}
+
 int main(void)
 {
    size_t nrofbytes;
@@ -1002,6 +1088,7 @@ int main(void)
       test_iqsignal();
       test_iqmsg();
       test_multi_send();
+      test_multi_recv();
 
       TEST(0 == allocated_bytes(&nrofbytes2));
       if (nrofbytes == nrofbytes2) break;
