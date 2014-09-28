@@ -58,19 +58,19 @@ void close_iqueue(iqueue_t* queue);
 
 // Stores msg in queue. EAGAIN is returned if queue is full.
 // EPIPE is returned if queue is closed.
-int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg);
+int trysend_iqueue(iqueue_t* queue, void* msg);
 
 // Stores msg in queue. Blocks if queue is full.
 // EPIPE is returned if queue is closed.
-int send_iqueue(iqueue_t* queue, iqmsg_t* msg);
+int send_iqueue(iqueue_t* queue, void* msg);
 
 // Receives msg from queue. EAGAIN is returned if queue is empty.
 // EPIPE is returned if queue is closed.
-int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg);
+int tryrecv_iqueue(iqueue_t* queue, /*out*/void** msg);
 
 // Receives msg from queue. Blocks if queue is empty.
 // EPIPE is returned if queue is closed.
-int recv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg);
+int recv_iqueue(iqueue_t* queue, /*out*/void** msg);
 
 // === iqsignal_t ===
 
