@@ -9,13 +9,13 @@ struct echomsg_t {
 
 void* server(void* queue)
 {
-   iqmsg_t* msg = 0;
+   void* msg = 0;
    while (0 == recv_iqueue(queue, &msg)) {
       printf("Echo: %s\n", ((struct echomsg_t*)msg)->str);
       // set return value (no error)
       ((struct echomsg_t*)msg)->err = 0;
       // signal client it is safe to delete msg
-      setprocessed_iqmsg(msg);
+      setprocessed_iqmsg(&((struct echomsg_t*)msg)->header);
    }
    return 0;
 }
@@ -24,7 +24,7 @@ void* client(void* queue)
 {
    iqsignal_t signal;
    struct echomsg_t msg = { iqmsg_INIT(&signal), "Hello Server", 1 };
-   send_iqueue(queue, &msg.header);
+   send_iqueue(queue, &msg);
    wait_iqsignal(&signal); // wait until msg is processed
    return (void*) msg.err;
 }
