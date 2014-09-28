@@ -101,8 +101,6 @@ void wait_iqsignal(iqsignal_t * signal)
       -- signal->sign0.waitcount;
    }
 
-   signal->signalcount = 0;
-
    pthread_mutex_unlock(&signal->sign0.lock);
 }
 
@@ -114,6 +112,18 @@ void signal_iqsignal(iqsignal_t * signal)
    pthread_cond_broadcast(&signal->sign0.cond);
 
    pthread_mutex_unlock(&signal->sign0.lock);
+}
+
+uint32_t clearsignal_iqsignal(iqsignal_t * signal)
+{
+   pthread_mutex_lock(&signal->sign0.lock);
+
+   uint32_t oldval = signal->signalcount;
+   signal->signalcount = 0;
+
+   pthread_mutex_unlock(&signal->sign0.lock);
+
+   return oldval;
 }
 
 // === iqueue_t ===
@@ -205,24 +215,23 @@ void close_iqueue(iqueue_t* queue)
 
 }
 
-int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
+static int trysend_nowakeup_iqueue(iqueue_t* queue, iqmsg_t* msg)
 {
    if (msg == 0) {
       return EINVAL;
    }
 
-   uint32_t oldval = cmpxchg_atomicu32(&queue->next_and_nrofmsg, 0, 0);
-
    for (;;) {
-      if (queue->closed) {
-         return EPIPE;
-      }
-
+      uint32_t oldval  = cmpxchg_atomicu32(&queue->next_and_nrofmsg, 0, 0);
       uint16_t next    = (uint16_t) (oldval >> 16);
       uint16_t nrofmsg = (uint16_t) oldval;
       unsigned pos = next + (unsigned) nrofmsg;
       if (pos >= queue->size) {
          pos -= queue->size;
+      }
+
+      if (queue->closed) {
+         return EPIPE;
       }
 
       if (nrofmsg >= queue->size) {
@@ -232,42 +241,32 @@ int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
       ++ nrofmsg;
       uint32_t newval = ((uint32_t)next << 16) + nrofmsg;
 
-      if (0 == cmpxchg_atomicptr(&queue->msg[pos], 0, msg)) {
+      if (0 == cmpxchg_atomicptr(&queue->msg[pos], 0, (void*)msg)) {
          if (oldval == cmpxchg_atomicu32(&queue->next_and_nrofmsg, oldval, newval)) {
             break;
          }
-         cmpxchg_atomicptr(&queue->msg[pos], msg, 0);
+         cmpxchg_atomicptr(&queue->msg[pos], (void*)msg, 0);
       }
-
-      oldval = queue->next_and_nrofmsg;
-   }
-
-   if (queue->reader.waitcount) {
-      // wake up reader
-      pthread_mutex_lock(&queue->reader.lock);
-      pthread_cond_signal(&queue->reader.cond);
-      pthread_mutex_unlock(&queue->reader.lock);
    }
 
    return 0;
 }
 
-int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
+static int tryrecv_nowakeup_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
 {
    if (msg == 0) {
       return EINVAL;
    }
 
-   uint32_t oldval = cmpxchg_atomicu32(&queue->next_and_nrofmsg, 0, 0);
-
    for (;;) {
+      uint32_t oldval = cmpxchg_atomicu32(&queue->next_and_nrofmsg, 0, 0);
+      uint16_t next    = (uint16_t) (oldval >> 16);
+      uint16_t nrofmsg = (uint16_t) oldval;
+      unsigned pos = next;
+
       if (queue->closed) {
          return EPIPE;
       }
-
-      uint16_t next    = (uint16_t) (oldval >> 16);
-      uint16_t nrofmsg = (uint16_t) oldval;
-      uint16_t pos = next;
 
       if (!nrofmsg) {
          return EAGAIN;
@@ -286,68 +285,85 @@ int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
          *msg = fetchedmsg;
          break;
       }
-
-      oldval = queue->next_and_nrofmsg;
-   }
-
-   if (queue->writer.waitcount) {
-      // wake up writer
-      pthread_mutex_lock(&queue->writer.lock);
-      pthread_cond_signal(&queue->writer.cond);
-      pthread_mutex_unlock(&queue->writer.lock);
    }
 
    return 0;
 }
 
+#define WAKEUP_READER() \
+   if (!err && queue->reader.waitcount) {        \
+      pthread_mutex_lock(&queue->reader.lock);   \
+      pthread_cond_signal(&queue->reader.cond);  \
+      pthread_mutex_unlock(&queue->reader.lock); \
+   }
+
+#define WAKEUP_WRITER() \
+   if (!err && queue->writer.waitcount) {        \
+      pthread_mutex_lock(&queue->writer.lock);   \
+      pthread_cond_signal(&queue->writer.cond);  \
+      pthread_mutex_unlock(&queue->writer.lock); \
+   }
+
+int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
+{
+   int err = trysend_nowakeup_iqueue(queue, msg);
+
+   WAKEUP_READER();
+
+   return err;
+}
+
+int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
+{
+   int err = tryrecv_nowakeup_iqueue(queue, msg);
+
+   WAKEUP_WRITER();
+
+   return err;
+}
+
 int send_iqueue(iqueue_t* queue, iqmsg_t* msg)
 {
-   int err = trysend_iqueue(queue, msg);
+   int err = trysend_nowakeup_iqueue(queue, msg);
 
-   while (err == EAGAIN) {
+   if (EAGAIN == err) {
       pthread_mutex_lock(&queue->writer.lock);
       ++ queue->writer.waitcount;
 
-      err = trysend_iqueue(queue, msg);
-
-      if (EAGAIN == err) {
+      for (;;) {
+         err = trysend_nowakeup_iqueue(queue, msg);
+         if (EAGAIN != err) break;
          pthread_cond_wait(&queue->writer.cond, &queue->writer.lock);
-         if (queue->closed) err = EPIPE;
       }
 
       -- queue->writer.waitcount;
       pthread_mutex_unlock(&queue->writer.lock);
-
-      if (EAGAIN == err) {
-         err = trysend_iqueue(queue, msg);
-      }
    }
+
+   WAKEUP_READER();
 
    return err;
 }
 
 int recv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
 {
-   int err = tryrecv_iqueue(queue, msg);
+   int err = tryrecv_nowakeup_iqueue(queue, msg);
 
-   while (err == EAGAIN) {
+   if (EAGAIN == err) {
       pthread_mutex_lock(&queue->reader.lock);
       ++ queue->reader.waitcount;
 
-      err = tryrecv_iqueue(queue, msg);
-
-      if (EAGAIN == err) {
+      for (;;) {
+         err = tryrecv_nowakeup_iqueue(queue, msg);
+         if (EAGAIN != err) break;
          pthread_cond_wait(&queue->reader.cond, &queue->reader.lock);
-         if (queue->closed) err = EPIPE;
       }
 
       -- queue->reader.waitcount;
       pthread_mutex_unlock(&queue->reader.lock);
-
-      if (EAGAIN == err) {
-         err = tryrecv_iqueue(queue, msg);
-      }
    }
+
+   WAKEUP_WRITER();
 
    return err;
 }
