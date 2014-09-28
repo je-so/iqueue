@@ -756,9 +756,21 @@ static void test_iqsignal(void)
    for (size_t i = 1; i; i <<= 1) {
       signal.signalcount = i;
       wait_iqsignal(&signal);
-      TEST(0 == signal.signalcount /*cleared*/);
+      TEST(i == signal.signalcount);
       TEST(0 == signal.sign0.waitcount);
    }
+   PASS();
+
+   // TEST clearsignal_iqsignal
+   for (size_t i = 1; i; i <<= 1) {
+      signal.signalcount = i;
+      TEST(i == clearsignal_iqsignal(&signal));
+      TEST(0 == signal.signalcount);
+      TEST(0 == signal.sign0.waitcount);
+   }
+   TEST(0 == clearsignal_iqsignal(&signal));
+   TEST(0 == signal.signalcount);
+   TEST(0 == signal.sign0.waitcount);
    PASS();
 
    // TEST wait_iqsignal: wait
@@ -775,7 +787,7 @@ static void test_iqsignal(void)
 
    // TEST signal_iqsignal: wakeup all waiting threads
    signal_iqsignal(&signal);
-   TEST(1 == signalcount_iqsignal(&signal) || 0 == signalcount_iqsignal(&signal));
+   TEST(1 == signalcount_iqsignal(&signal));
    for (int i = 0; i < 100000; ++i) {
       sched_yield();
       if (0 == cmpxchg_atomicsize(&signal.sign0.waitcount, 0, 0)) break;
@@ -859,6 +871,116 @@ static void test_iqmsg(void)
    TEST(0 == free_iqsignal(&signal));
 }
 
+static uint32_t   s_threadid;
+static int        s_threadtry;
+static iqsignal_t s_threadsignal;
+
+#define MAXRANGE  10000
+#define MAXTHREAD 14
+#define QUEUESIZE 1000
+
+struct range_t {
+   uint32_t tid;
+   uint32_t nr;
+};
+
+void* thread_sendrange(void* queue)
+{
+   uint32_t myid = s_threadid;
+   uint32_t maxrange = MAXRANGE / (s_threadtry ? 1 : 10);
+   struct range_t msg[2*QUEUESIZE];
+
+   for (;;) {
+      myid = s_threadid;
+      if (myid == cmpxchg_atomicu32(&s_threadid, myid, myid+1)) break;
+   }
+
+   for (uint32_t nr = 0; nr < maxrange; ++nr) {
+      uint32_t m = nr % (2*QUEUESIZE);
+      msg[m].tid = myid;
+      msg[m].nr  = nr;
+      for (int i = 0; i < 200 && 0 != ((iqueue_t*)queue)->writer.waitcount; ++i) {
+         sched_yield();
+      }
+      for (int i = 0; ; ++i) {
+         int err = s_threadtry ? trysend_iqueue(queue, (iqmsg_t*) &msg[m]) : send_iqueue(queue, (iqmsg_t*) &msg[m]);
+         if (err == 0) break;
+         TEST(s_threadtry && err == EAGAIN);
+         sched_yield();
+         if (i == 1000000) {
+            printf("Sender starvation\n");
+            exit(1);
+         }
+      }
+   }
+
+   wait_iqsignal(&s_threadsignal);
+
+   return 0;
+}
+
+void* thread_recvrange(void* queue)
+{
+   iqmsg_t* imsg;
+   uint32_t maxrange = MAXRANGE / (s_threadtry ? 1 : 10);
+   uint32_t expectnr[MAXTHREAD] = { 0 };
+   uint64_t maxcount = (uint64_t)MAXTHREAD * maxrange;
+
+   while (maxcount > 0) {
+      for (int i = 0; ; ++i) {
+         int err = s_threadtry ? tryrecv_iqueue(queue, &imsg) : recv_iqueue(queue, &imsg);
+         if (err == 0) break;
+         TEST(err == EAGAIN);
+         sched_yield();
+         if (i == 1000000) {
+            printf("Receiver starvation\n");
+            exit(1);
+         }
+      }
+
+      struct range_t* rmsg = (struct range_t*) imsg;
+      TEST(rmsg->tid < MAXTHREAD);
+      TEST(rmsg->nr == expectnr[rmsg->tid]);
+      ++ expectnr[rmsg->tid];
+      -- maxcount;
+   }
+
+   for (int i = 0; i < MAXTHREAD; ++i) {
+      TEST(expectnr[i] == maxrange);
+   }
+
+   return 0;
+}
+
+void test_multi_send(void)
+{
+   iqueue_t* queue = 0;
+   pthread_t rthr;
+   pthread_t sthr[MAXTHREAD];
+
+   for (int usetry = 0; usetry <= 1; ++usetry) {
+      // start threads
+      s_threadid  = 0;
+      s_threadtry = usetry;
+      TEST(0 == init_iqsignal(&s_threadsignal));
+      TEST(0 == new_iqueue(&queue, QUEUESIZE));
+      for (int i = 0; i < MAXTHREAD; ++i) {
+         TEST(0 == pthread_create(&sthr[i], 0, &thread_sendrange, queue));
+      }
+      TEST(0 == pthread_create(&rthr, 0, &thread_recvrange, queue));
+
+      // stop threads
+      TEST(0 == pthread_join(rthr, 0));
+      signal_iqsignal(&s_threadsignal);
+      for (int i = 0; i < MAXTHREAD; ++i) {
+         TEST(0 == pthread_join(sthr[i], 0));
+      }
+      TEST(0 == delete_iqueue(&queue));
+      TEST(0 == free_iqsignal(&s_threadsignal));
+      PASS();
+   }
+}
+
 int main(void)
 {
    size_t nrofbytes;
@@ -879,6 +1001,7 @@ int main(void)
       test_close();
       test_iqsignal();
       test_iqmsg();
+      test_multi_send();
 
       TEST(0 == allocated_bytes(&nrofbytes2));
       if (nrofbytes == nrofbytes2) break;
