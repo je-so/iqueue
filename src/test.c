@@ -57,7 +57,7 @@
  * reached ("in use bytes") and then returns the converted
  * number at the end of the line as result.
  * */
-int allocated_bytes(/*out*/size_t * nrofbytes)
+int allocated_bytes(/*out*/size_t* nrofbytes)
 {
    int err;
    int fd     = -1;
@@ -156,7 +156,7 @@ ONERR:
 
 #else
 // Implement allocated_bytes for your operating system here !
-int allocated_bytes(size_t * nrofbytes)
+int allocated_bytes(size_t* nrofbytes)
 {
    *nrofbytes = 0;
    return 0;
@@ -164,7 +164,7 @@ int allocated_bytes(size_t * nrofbytes)
 
 #endif
 
-static void* thr_lock(void * param)
+static void* thr_lock(void* param)
 {
    iqueue_t* queue = param;
 
@@ -257,9 +257,9 @@ static void test_initfree(void)
    PASS();
 }
 
-static void* thread_simulate_read(void * param)
+static void* thread_simulate_read(void* param)
 {
-   iqueue_t * queue = param;
+   iqueue_t* queue = param;
 
    TEST(0 == queue->reader.waitcount);
    TEST(0 == pthread_mutex_lock(&queue->reader.lock));
@@ -276,9 +276,9 @@ static void* thread_simulate_read(void * param)
 
 static void test_trysend_single(void)
 {
-   iqueue_t * queue = 0;
-   iqmsg_t    msg[10];
-   pthread_t  thr;
+   iqueue_t* queue = 0;
+   iqmsg_t   msg[10];
+   pthread_t thr;
 
    // prepare
    TEST(0 == new_iqueue(&queue, 10));
@@ -339,9 +339,9 @@ static void test_trysend_single(void)
    TEST(0 == delete_iqueue(&queue));
 }
 
-static void* thread_call_send(void * param)
+static void* thread_call_send(void* param)
 {
-   iqueue_t * queue = param;
+   iqueue_t* queue = param;
 
    TEST(0 == queue->writer.waitcount);
    TEST(0 == pthread_mutex_lock(&queue->writer.lock));
@@ -350,7 +350,7 @@ static void* thread_call_send(void * param)
    if (pos >= queue->size) {
       pos -= queue->size;
    }
-   iqmsg_t * msg = queue->msg[pos];
+   iqmsg_t* msg = queue->msg[pos];
    TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
 
    TEST(0 == send_iqueue(queue, msg));
@@ -360,9 +360,9 @@ static void* thread_call_send(void * param)
 
 static void test_send_single(void)
 {
-   iqueue_t * queue = 0;
-   iqmsg_t    msg[10];
-   pthread_t  thr;
+   iqueue_t* queue = 0;
+   iqmsg_t   msg[10];
+   pthread_t thr;
 
    // prepare
    TEST(0 == new_iqueue(&queue, 10));
@@ -437,9 +437,9 @@ static void test_send_single(void)
 
 static void test_tryrecv_single(void)
 {
-   iqueue_t * queue = 0;
+   iqueue_t*  queue = 0;
    iqmsg_t    msg[10];
-   iqmsg_t  * rcv;
+   void*      rcv;
    pthread_t  thr;
 
    // prepare
@@ -508,12 +508,12 @@ static void test_tryrecv_single(void)
    TEST(0 == delete_iqueue(&queue));
 }
 
-static void* thread_call_recv(void * param)
+static void* thread_call_recv(void* param)
 {
-   iqueue_t * queue = param;
+   iqueue_t* queue = param;
 
    TEST(0 == queue->reader.waitcount);
-   iqmsg_t * rcv = 0;
+   void* rcv = 0;
    TEST(0 == recv_iqueue(queue, &rcv));
    TEST(0 != rcv);
 
@@ -522,10 +522,10 @@ static void* thread_call_recv(void * param)
 
 static void test_recv_single(void)
 {
-   iqueue_t * queue = 0;
-   iqmsg_t    msg[10];
-   iqmsg_t  * rcv;
-   pthread_t  thr;
+   iqueue_t* queue = 0;
+   iqmsg_t   msg[10];
+   void*     rcv;
+   pthread_t thr;
 
    // prepare
    TEST(0 == new_iqueue(&queue, 10));
@@ -603,7 +603,7 @@ static void test_recv_single(void)
    TEST(0 == delete_iqueue(&queue));
 }
 
-static void* thread_epipe_send(void * queue)
+static void* thread_epipe_send(void* queue)
 {
    iqmsg_t msg;
    int err = send_iqueue(queue, &msg);
@@ -614,9 +614,9 @@ static void* thread_epipe_send(void * queue)
    return 0;
 }
 
-static void* thread_epipe_recv(void * queue)
+static void* thread_epipe_recv(void* queue)
 {
-   iqmsg_t* msg = 0;
+   void* msg = 0;
    int err = recv_iqueue(queue, &msg);
    if (err != EPIPE) {
       printf("wrong err = %d\n", err);
@@ -627,9 +627,9 @@ static void* thread_epipe_recv(void * queue)
 
 static void test_close(void)
 {
-   iqueue_t * queue = 0;
-   iqmsg_t    msg;
-   pthread_t  thr[100];
+   iqueue_t* queue = 0;
+   iqmsg_t   msg;
+   pthread_t thr[100];
 
    // prepare
 
@@ -921,7 +921,7 @@ void* thread_sendrange(void* queue)
 
 void* thread_recvrange(void* queue)
 {
-   iqmsg_t* imsg;
+   void*    imsg;
    uint32_t maxrange = MAXRANGE / (s_threadtry ? 1 : 10);
    uint32_t expectnr[MAXTHREAD] = { 0 };
    uint64_t maxcount = (uint64_t)MAXTHREAD * maxrange;
