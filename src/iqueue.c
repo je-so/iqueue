@@ -212,7 +212,6 @@ void close_iqueue(iqueue_t* queue)
 
       sched_yield();
    }
-
 }
 
 static int trysend_nowakeup_iqueue(iqueue_t* queue, void* msg)
