@@ -215,7 +215,7 @@ void close_iqueue(iqueue_t* queue)
 
 }
 
-static int trysend_nowakeup_iqueue(iqueue_t* queue, iqmsg_t* msg)
+static int trysend_nowakeup_iqueue(iqueue_t* queue, void* msg)
 {
    if (msg == 0) {
       return EINVAL;
@@ -241,18 +241,18 @@ static int trysend_nowakeup_iqueue(iqueue_t* queue, iqmsg_t* msg)
       ++ nrofmsg;
       uint32_t newval = ((uint32_t)next << 16) + nrofmsg;
 
-      if (0 == cmpxchg_atomicptr(&queue->msg[pos], 0, (void*)msg)) {
+      if (0 == cmpxchg_atomicptr(&queue->msg[pos], 0, msg)) {
          if (oldval == cmpxchg_atomicu32(&queue->next_and_nrofmsg, oldval, newval)) {
             break;
          }
-         cmpxchg_atomicptr(&queue->msg[pos], (void*)msg, 0);
+         cmpxchg_atomicptr(&queue->msg[pos], msg, 0);
       }
    }
 
    return 0;
 }
 
-static int tryrecv_nowakeup_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
+static int tryrecv_nowakeup_iqueue(iqueue_t* queue, /*out*/void** msg)
 {
    if (msg == 0) {
       return EINVAL;
@@ -304,7 +304,7 @@ static int tryrecv_nowakeup_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
       pthread_mutex_unlock(&queue->writer.lock); \
    }
 
-int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
+int trysend_iqueue(iqueue_t* queue, void* msg)
 {
    int err = trysend_nowakeup_iqueue(queue, msg);
 
@@ -313,7 +313,7 @@ int trysend_iqueue(iqueue_t* queue, iqmsg_t* msg)
    return err;
 }
 
-int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
+int tryrecv_iqueue(iqueue_t* queue, /*out*/void** msg)
 {
    int err = tryrecv_nowakeup_iqueue(queue, msg);
 
@@ -322,7 +322,7 @@ int tryrecv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
    return err;
 }
 
-int send_iqueue(iqueue_t* queue, iqmsg_t* msg)
+int send_iqueue(iqueue_t* queue, void* msg)
 {
    int err = trysend_nowakeup_iqueue(queue, msg);
 
@@ -345,7 +345,7 @@ int send_iqueue(iqueue_t* queue, iqmsg_t* msg)
    return err;
 }
 
-int recv_iqueue(iqueue_t* queue, /*out*/iqmsg_t** msg)
+int recv_iqueue(iqueue_t* queue, /*out*/void** msg)
 {
    int err = tryrecv_nowakeup_iqueue(queue, msg);
 
