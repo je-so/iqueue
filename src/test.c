@@ -869,13 +869,14 @@ static void test_iqmsg(void)
    TEST(0 == free_iqsignal(&signal));
 }
 
+#define MAXRANGE  80000
+#define MAXTHREAD 5
+#define QUEUESIZE 4000
+
 static uint32_t   s_threadid;
 static int        s_threadtry;
 static iqsignal_t s_threadsignal;
-
-#define MAXRANGE  10000
-#define MAXTHREAD 14
-#define QUEUESIZE 1000
+static uint8_t    s_flag[MAXTHREAD][MAXRANGE];
 
 struct range_t {
    uint32_t tid;
@@ -885,7 +886,6 @@ struct range_t {
 void* thread_sendrange(void* queue)
 {
    uint32_t myid = s_threadid;
-   uint32_t maxrange = MAXRANGE / (s_threadtry ? 1 : 10);
    struct range_t msg[2*QUEUESIZE];
 
    for (;;) {
@@ -893,13 +893,21 @@ void* thread_sendrange(void* queue)
       if (myid == cmpxchg_atomicu32(&s_threadid, myid, myid+1)) break;
    }
 
-   for (uint32_t nr = 0; nr < maxrange; ++nr) {
+   for (uint32_t nr = 0; nr < 2*QUEUESIZE; ++nr) {
+      msg[nr].nr = MAXRANGE;
+   }
+
+   for (uint32_t nr = 0; nr < MAXRANGE; ++nr) {
       uint32_t m = nr % (2*QUEUESIZE);
+      while (MAXRANGE != cmpxchg_atomicu32(&msg[m].nr, MAXRANGE, 0)) {
+         sched_yield(); // message in use
+      }
       msg[m].tid = myid;
       msg[m].nr  = nr;
       for (int i = 0; i < 200 && 0 != ((iqueue_t*)queue)->writer.waitcount; ++i) {
          sched_yield();
       }
+
       for (int i = 0; ; ++i) {
          int err = s_threadtry ? trysend_iqueue(queue, (iqmsg_t*) &msg[m]) : send_iqueue(queue, (iqmsg_t*) &msg[m]);
          if (err == 0) break;
@@ -919,14 +927,12 @@ void* thread_sendrange(void* queue)
 
 void* thread_recvrange(void* queue)
 {
-   void*    imsg;
-   uint32_t maxrange = MAXRANGE / (s_threadtry ? 1 : 10);
-   uint32_t expectnr[MAXTHREAD] = { 0 };
-   uint64_t maxcount = (uint64_t)MAXTHREAD * maxrange;
+   void* imsg;
 
-   while (maxcount > 0) {
+   for (;;) {
       for (int i = 0; ; ++i) {
          int err = s_threadtry ? tryrecv_iqueue(queue, &imsg) : recv_iqueue(queue, &imsg);
+         if (err == EPIPE) return 0;
          if (err == 0) break;
          TEST(err == EAGAIN);
          sched_yield();
@@ -938,25 +944,23 @@ void* thread_recvrange(void* queue)
 
       struct range_t* rmsg = (struct range_t*) imsg;
       TEST(rmsg->tid < MAXTHREAD);
-      TEST(rmsg->nr == expectnr[rmsg->tid]);
-      ++ expectnr[rmsg->tid];
-      -- maxcount;
-   }
-
-   for (int i = 0; i < MAXTHREAD; ++i) {
-      TEST(expectnr[i] == maxrange);
+      TEST(rmsg->nr  < MAXRANGE);
+      s_flag[rmsg->tid][rmsg->nr] = (uint8_t) (s_flag[rmsg->tid][rmsg->nr] + 1);
+      // message processed
+      cmpxchg_atomicu32(&rmsg->nr, rmsg->nr, MAXRANGE);
    }
 
    return 0;
 }
 
-void test_multi_send(void)
+void test_multi_sendrecv(void)
 {
    iqueue_t* queue = 0;
-   pthread_t rthr;
+   pthread_t rthr[MAXTHREAD/2];
    pthread_t sthr[MAXTHREAD];
 
    for (int usetry = 0; usetry <= 1; ++usetry) {
+      memset(s_flag, 0, sizeof(s_flag));
       // start threads
       s_threadid  = 0;
       s_threadtry = usetry;
@@ -964,105 +968,44 @@ void test_multi_send(void)
       TEST(0 == new_iqueue(&queue, QUEUESIZE));
       for (int i = 0; i < MAXTHREAD; ++i) {
          TEST(0 == pthread_create(&sthr[i], 0, &thread_sendrange, queue));
+         if (i < MAXTHREAD/2) {
+            TEST(0 == pthread_create(&rthr[i], 0, &thread_recvrange, queue));
+         }
       }
-      TEST(0 == pthread_create(&rthr, 0, &thread_recvrange, queue));
-
+      for (int i = 0; i < MAXTHREAD; ++i) {
+         for (int r = 0; r < MAXRANGE; ++r) {
+            int x = 0;
+            while (__sync_fetch_and_add(&s_flag[i][r], 0) == 0) {
+               sched_yield();
+               ++x;
+               if (x == 1000000) {
+                  // DEBUG:
+                  printf("usetry:%d rwait:%d wwait:%d wready:%d next_andnrofmsg:%x\n", usetry, queue->reader.waitcount, queue->writer.waitcount, s_threadsignal.sign0.waitcount, queue->next_and_nrofmsg);
+                  x = 0;
+               }
+            }
+            // == DEBUG: PRINT PROGRESS (change 0 into 1) ==
+            if (0 && 0 == r % 1000) {
+               printf("%d: %d\n", i, r);
+            }
+         }
+      }
+      close_iqueue(queue);
       // stop threads
-      TEST(0 == pthread_join(rthr, 0));
+      for (int i = 0; i < MAXTHREAD/2; ++i) {
+         TEST(0 == pthread_join(rthr[i], 0));
+      }
       signal_iqsignal(&s_threadsignal);
       for (int i = 0; i < MAXTHREAD; ++i) {
          TEST(0 == pthread_join(sthr[i], 0));
       }
       TEST(0 == delete_iqueue(&queue));
       TEST(0 == free_iqsignal(&s_threadsignal));
-      PASS();
-   }
-}
-
-void* thread_sendiqmsg(void* queue)
-{
-   uint32_t maxrange = MAXRANGE / (s_threadtry ? 1 : 10);
-   iqsignal_t signal;
-   iqmsg_t  msg[1000];
-
-   TEST(0 == init_iqsignal(&signal));
-
-   for (uint32_t nr = 0; nr < maxrange; ) {
-      for (unsigned m = 0; m < 1000; ++m, ++nr) {
-         init_iqmsg(&msg[m], &signal);
-         for (int i = 0; ; ++i) {
-            int err = s_threadtry ? trysend_iqueue(queue, (iqmsg_t*) &msg[m]) : send_iqueue(queue, (iqmsg_t*) &msg[m]);
-            if (err == 0) break;
-            TEST(s_threadtry && err == EAGAIN);
-            sched_yield();
-            if (i == 1000000) {
-               printf("Sender starvation\n");
-               exit(1);
-            }
+      for (int r = 0; r < MAXRANGE; ++r) {
+         for (int i = 0; i < MAXTHREAD; ++i) {
+            TEST(s_flag[i][r] == 1);
          }
       }
-      while (1000 != signalcount_iqsignal(&signal)) {
-         sched_yield();
-      }
-      for (unsigned m = 0; m < 1000; ++m) {
-         TEST(msg[m].processed == 1);
-      }
-      clearsignal_iqsignal(&signal);
-   }
-
-   return 0;
-}
-
-void* thread_recviqmsg(void* queue)
-{
-   void*    msg;
-
-   for (;;) {
-      for (int i = 0; ; ++i) {
-         int err = s_threadtry ? tryrecv_iqueue(queue, &msg) : recv_iqueue(queue, &msg);
-         if (err == 0) break;
-         if (err == EPIPE) return 0;
-         TEST(err == EAGAIN);
-         sched_yield();
-         if (i == 1000000) {
-            printf("Receiver starvation\n");
-            exit(1);
-         }
-      }
-
-      iqmsg_t* iqmsg = msg;
-      TEST(0 == iqmsg->processed);
-      TEST(0 != iqmsg->signal);
-      setprocessed_iqmsg(iqmsg);
-   }
-
-   return 0;
-}
-
-void test_multi_recv(void)
-{
-   iqueue_t* queue = 0;
-   pthread_t rthr[MAXTHREAD/2];
-   pthread_t sthr[MAXTHREAD/2];
-
-   for (int usetry = 0; usetry <= 1; ++usetry) {
-      // start threads
-      s_threadtry = usetry;
-      TEST(0 == new_iqueue(&queue, QUEUESIZE));
-      for (int i = 0; i < MAXTHREAD/2; ++i) {
-         TEST(0 == pthread_create(&sthr[i], 0, &thread_sendiqmsg, queue));
-         TEST(0 == pthread_create(&rthr[i], 0, &thread_recviqmsg, queue));
-      }
-
-      // stop threads
-      for (int i = 0; i < MAXTHREAD/2; ++i) {
-         TEST(0 == pthread_join(sthr[i], 0));
-      }
-      close_iqueue(queue);
-      for (int i = 0; i < MAXTHREAD/2; ++i) {
-         TEST(0 == pthread_join(rthr[i], 0));
-      }
-      TEST(0 == delete_iqueue(&queue));
       PASS();
    }
 }
@@ -1087,8 +1030,7 @@ int main(void)
       test_close();
       test_iqsignal();
       test_iqmsg();
-      test_multi_send();
-      test_multi_recv();
+      test_multi_sendrecv();
 
       TEST(0 == allocated_bytes(&nrofbytes2));
       if (nrofbytes == nrofbytes2) break;
