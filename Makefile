@@ -32,7 +32,7 @@ iqueue: bin/iqueue.a bin/iqueue_debug.a
 
 test: bin/iqueue_test bin/iqueue_test_debug
 
-examples: example1 example2
+examples: example1 example2 example3
 
 run: bin/iqueue_test
 	@bin/iqueue_test
@@ -45,11 +45,7 @@ bin/iqueue_test_debug: src/test.c bin/iqueue_debug.a
 	@echo $(CC) $^ $(LIBS) -o $@
 	@$(CC) $(CFLAGS_debug) $^ $(LIBS) -o $@
 
-example1: example1.c bin/iqueue.a
-	@echo $(CC) $^ $(LIBS) -o $@
-	@$(CC) $(CFLAGS_release) $^ $(LIBS) -o $@
-
-example2: example2.c bin/iqueue.a
+example%: example%.c bin/iqueue.a
 	@echo $(CC) $^ $(LIBS) -o $@
 	@$(CC) $(CFLAGS_release) $^ $(LIBS) -o $@
 
