@@ -125,3 +125,7 @@ int main(void)
    return 0;
 }
 ```
+
+## Internal Workings ##
+
+![](https://github.com/je-so/testcode/blob/master/img/iqueue.png)
