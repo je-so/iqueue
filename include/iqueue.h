@@ -123,4 +123,48 @@ static inline void setprocessed_iqmsg(iqmsg_t* msg)
          }
 }
 
+// === support for statically typed queues ===
+
+/* Declares/implements queue type affix##_t and whole iqueue interface
+ * where msg type (void*) is replaced with type (msg_t*). 
+ * Use init_##affix / free_##affix to initialize/free queue. */
+#define iqueue_DECLARE(affix, msg_t) \
+         typedef struct affix ##_t { \
+            iqueue_t* queue;          \
+         } affix ##_t;               \
+         static inline int init_##affix(affix##_t* queue, uint16_t size) \
+         { \
+            return new_iqueue(&queue->queue, size); \
+         } \
+         static inline int free_##affix(affix##_t* queue) \
+         { \
+            return delete_iqueue(&queue->queue); \
+         } \
+         static inline void close_##affix(affix##_t* queue) \
+         { \
+            close_iqueue(queue->queue); \
+         } \
+         static inline int trysend_##affix(affix##_t* queue, msg_t* msg) \
+         { \
+            return trysend_iqueue(queue->queue, msg); \
+         } \
+         static inline int send_##affix(affix##_t* queue, msg_t* msg) \
+         { \
+            return send_iqueue(queue->queue, msg); \
+         } \
+         static inline int tryrecv_##affix(affix##_t* queue, msg_t** msg) \
+         { \
+            void* tmp; \
+            int err = tryrecv_iqueue(queue->queue, &tmp); \
+            *msg = tmp; \
+            return err; \
+         } \
+         static inline int recv_##affix(affix##_t* queue, msg_t** msg) \
+         { \
+            void* tmp; \
+            int err = recv_iqueue(queue->queue, &tmp); \
+            *msg = tmp; \
+            return err; \
+         }
+
 #endif
