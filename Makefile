@@ -24,6 +24,7 @@ clean:
 
 info:
 	@echo Building iqueue on '$(OS)'
+	@echo Use "'make run'" to start iqueue test
 
 makedir:
 	@mkdir -p bin/release bin/debug
