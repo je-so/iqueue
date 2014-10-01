@@ -190,12 +190,12 @@ static void test_initfree(void)
    // TEST new_iqueue
    TEST(0 == new_iqueue(&queue, 12345));
    TEST(0 != queue);
-   TEST(12345 == queue->size);
-   TEST(0 == queue->next_and_nrofmsg);
+   TEST(12345 == queue->capacity);
+   TEST(0 == queue->next_size);
    TEST(0 == queue->closed);
    TEST(0 == queue->reader.waitcount);
    TEST(0 == queue->writer.waitcount);
-   for (size_t i = 0; i < queue->size; ++i) {
+   for (size_t i = 0; i < queue->capacity; ++i) {
       TEST(0 == queue->msg[i]);
    }
    // test writelock + writecond
@@ -239,12 +239,12 @@ static void test_initfree(void)
    for (size_t s = 1; s < 65536; s = (s << 1) + 33) {
       TEST(0 == new_iqueue(&queue, (uint16_t) s));
       TEST(0 != queue);
-      TEST(s == queue->size);
-      TEST(0 == queue->next_and_nrofmsg);
+      TEST(s == queue->capacity);
+      TEST(0 == queue->next_size);
       TEST(0 == queue->closed);
       TEST(0 == queue->reader.waitcount);
       TEST(0 == queue->writer.waitcount);
-      for (size_t i = 0; i < queue->size; ++i) {
+      for (size_t i = 0; i < queue->capacity; ++i) {
          TEST(0 == queue->msg[i]);
       }
       TEST(0 == delete_iqueue(&queue));
@@ -257,13 +257,54 @@ static void test_initfree(void)
    PASS();
 }
 
+static void test_query(void)
+{
+   iqueue_t* queue = 0;
+
+   // prepare
+   TEST(0 == new_iqueue(&queue, 128));
+
+   // TEST capacity_iqueue
+   TEST(128 == capacity_iqueue(queue));
+   PASS();
+
+   // TEST size_iqueue
+   TEST(0 == size_iqueue(queue));
+   PASS();
+
+   // TEST capacity_iqueue: returns value from size
+   queue->capacity = 0;
+   TEST(0 == capacity_iqueue(queue));
+   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
+      queue->capacity = i;
+      TEST(i == capacity_iqueue(queue));
+   }
+   queue->capacity = 128;
+   PASS();
+
+   // TEST size_iqueue: returns lower bits from next_size
+   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
+      queue->next_size = i;
+      TEST(i == size_iqueue(queue));
+      queue->next_size = ((uint32_t)i << 16) + i;
+      TEST(i == size_iqueue(queue));
+      queue->next_size = ((uint32_t)i << 16);
+      TEST(0 == size_iqueue(queue));
+   }
+   queue->next_size = 0;
+   PASS();
+
+   // unprepare
+   TEST(0 == delete_iqueue(&queue));
+}
+
 static void* thread_simulate_read(void* param)
 {
    iqueue_t* queue = param;
 
    TEST(0 == queue->reader.waitcount);
    TEST(0 == pthread_mutex_lock(&queue->reader.lock));
-   size_t pos = queue->next_and_nrofmsg >> 16;
+   size_t pos = queue->next_size >> 16;
    ++ queue->reader.waitcount;
    TEST(0 == queue->msg[pos]);
    TEST(0 == pthread_cond_wait(&queue->reader.cond, &queue->reader.lock));
@@ -298,8 +339,8 @@ static void test_trysend_single(void)
    for (unsigned i = 0; i < 10; ++i) {
       TEST(0 == queue->msg[i]);
       TEST(0 == trysend_iqueue(queue, &msg[i]));
-      TEST(10 == queue->size);
-      TEST((i+1) == queue->next_and_nrofmsg);
+      TEST(10 == queue->capacity);
+      TEST((i+1) == queue->next_size);
       TEST(0 == queue->closed);
       TEST(0 == queue->reader.waitcount);
       TEST(0 == queue->writer.waitcount);
@@ -309,14 +350,14 @@ static void test_trysend_single(void)
 
    // TEST trysend_iqueue: EAGAIN
    TEST(EAGAIN == trysend_iqueue(queue, &msg[1]));
-   TEST(10 == queue->next_and_nrofmsg);
+   TEST(10 == queue->next_size);
    TEST(&msg[0] == queue->msg[0]);
    PASS();
 
    // TEST trysend_iqueue: wakeup waiting reader
-   memset(queue->msg, 0, sizeof(queue->msg[0]) * queue->size);
+   memset(queue->msg, 0, sizeof(queue->msg[0]) * queue->capacity);
    for (uint32_t i = 0; i < 10; ++i) {
-      queue->next_and_nrofmsg = (i << 16);
+      queue->next_size = (i << 16);
       TEST(0 == pthread_create(&thr, 0, &thread_simulate_read, queue));
       for (int wc = 0; wc < 100000; ++wc) {
          sched_yield();
@@ -345,10 +386,10 @@ static void* thread_call_send(void* param)
 
    TEST(0 == queue->writer.waitcount);
    TEST(0 == pthread_mutex_lock(&queue->writer.lock));
-   uint32_t pos = queue->next_and_nrofmsg;
+   uint32_t pos = queue->next_size;
    pos = (pos >> 16) + (uint32_t)((uint16_t)pos);
-   if (pos >= queue->size) {
-      pos -= queue->size;
+   if (pos >= queue->capacity) {
+      pos -= queue->capacity;
    }
    iqmsg_t* msg = queue->msg[pos];
    TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
@@ -382,8 +423,8 @@ static void test_send_single(void)
    for (uint32_t i = 0; i < 10; ++i) {
       TEST(0 == queue->msg[i]);
       TEST(0 == send_iqueue(queue, &msg[i]));
-      TEST(10 == queue->size);
-      TEST((i+1) == queue->next_and_nrofmsg);
+      TEST(10 == queue->capacity);
+      TEST((i+1) == queue->next_size);
       TEST(0 == queue->closed);
       TEST(0 == queue->reader.waitcount);
       TEST(0 == queue->writer.waitcount);
@@ -413,7 +454,7 @@ static void test_send_single(void)
       }
       TEST(1 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0));
       // simulate reader
-      queue->next_and_nrofmsg = (((i+1) % 10) << 16) + 9;
+      queue->next_size = (((i+1) % 10) << 16) + 9;
       queue->msg[i] = 0;
       // wake up writer
       pthread_mutex_lock(&queue->writer.lock);
@@ -426,7 +467,7 @@ static void test_send_single(void)
       TEST(0 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0));
       TEST(0 == pthread_join(thr, 0));
       // writer has rewritten msg
-      TEST(queue->next_and_nrofmsg == (((i+1) % 10) << 16) + 10);
+      TEST(queue->next_size == (((i+1) % 10) << 16) + 10);
       TEST(&msg[i] == queue->msg[i]);
    }
    PASS();
@@ -459,15 +500,15 @@ static void test_tryrecv_single(void)
    for (unsigned i = 0; i < 10; ++i) {
       TEST(0 == trysend_iqueue(queue, &msg[i]));
    }
-   TEST(10 == queue->next_and_nrofmsg);
+   TEST(10 == queue->next_size);
 
    // TEST tryrecv_iqueue: get from queue
    for (uint32_t i = 0; i < 10; ++i) {
-      uint32_t n = (((i+1) % queue->size) << 16) + 9-i;
+      uint32_t n = (((i+1) % queue->capacity) << 16) + 9-i;
       TEST(0 == tryrecv_iqueue(queue, &rcv));
       TEST(rcv == &msg[i]);
-      TEST(10 == queue->size);
-      TEST(n == queue->next_and_nrofmsg);
+      TEST(10 == queue->capacity);
+      TEST(n == queue->next_size);
       TEST(0 == queue->closed);
       TEST(0 == queue->reader.waitcount);
       TEST(0 == queue->writer.waitcount);
@@ -477,7 +518,7 @@ static void test_tryrecv_single(void)
 
    // TEST tryrecv_iqueue: EAGAIN
    TEST(EAGAIN == tryrecv_iqueue(queue, &rcv));
-   TEST(0 == queue->next_and_nrofmsg);
+   TEST(0 == queue->next_size);
    PASS();
 
    // fill queue
@@ -547,11 +588,11 @@ static void test_recv_single(void)
 
    // TEST recv_iqueue: get from queue
    for (unsigned i = 0; i < 10; ++i) {
-      uint32_t n = (((i+1) % queue->size) << 16) + 9-i;
+      uint32_t n = (((i+1) % queue->capacity) << 16) + 9-i;
       TEST(0 == recv_iqueue(queue, &rcv));
       TEST(rcv == &msg[i]);
-      TEST(10 == queue->size);
-      TEST(n == queue->next_and_nrofmsg);
+      TEST(10 == queue->capacity);
+      TEST(n == queue->next_size);
       TEST(0 == queue->closed);
       TEST(0 == queue->reader.waitcount);
       TEST(0 == queue->writer.waitcount);
@@ -581,7 +622,7 @@ static void test_recv_single(void)
       }
       TEST(1 == cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0));
       // simulate writer
-      queue->next_and_nrofmsg = (i << 16) + 1;
+      queue->next_size = (i << 16) + 1;
       queue->msg[i] = &msg[i];
       // wake up reader
       pthread_mutex_lock(&queue->reader.lock);
@@ -594,7 +635,7 @@ static void test_recv_single(void)
       TEST(0 == cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0));
       TEST(0 == pthread_join(thr, 0));
       // reader has removed msg
-      TEST(queue->next_and_nrofmsg == (((i+1) % 10) << 16));
+      TEST(queue->next_size == (((i+1) % 10) << 16));
       TEST(0 == queue->msg[i]);
    }
    PASS();
@@ -654,7 +695,7 @@ static void test_close(void)
    TEST(0 == pthread_mutex_lock(&queue->writer.lock));
    TEST(50 == queue->writer.waitcount);
    TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
-   queue->next_and_nrofmsg = 0;  // simulate reading msg without
+   queue->next_size = 0;  // simulate reading msg without
    queue->msg[0] = 0;            // signalling waiting writers
    TEST(50 == cmpxchg_atomicsize(&queue->writer.waitcount, 50, 0));
    for (int i = 0; i < 50; ++i) {
@@ -693,7 +734,7 @@ static void test_close(void)
    TEST(0 == pthread_mutex_lock(&queue->writer.lock));
    TEST(50 == queue->writer.waitcount);
    TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
-   queue->next_and_nrofmsg = 0;  // simulate reading msg without
+   queue->next_size = 0;  // simulate reading msg without
    queue->msg[0] = 0;            // signalling waiting writers
    TEST(50 == cmpxchg_atomicsize(&queue->writer.waitcount, 50, 0));
    for (int i = 0; i < 50; ++i) {
@@ -743,7 +784,7 @@ static void test_iqsignal(void)
    TEST(0 == signalcount_iqsignal(&signal));
    PASS();
 
-   // TEST signal_iqsignal: adds1 1 to signalcount
+   // TEST signal_iqsignal: add 1 to signalcount
    for (size_t i = 1; i < 1000; ++i) {
       signal_iqsignal(&signal);
       TEST(i == signal.signalcount);
@@ -980,7 +1021,7 @@ void test_multi_sendrecv(void)
                ++x;
                if (x == 1000000) {
                   // DEBUG:
-                  printf("usetry:%d rwait:%d wwait:%d wready:%d next_andnrofmsg:%x\n", usetry, queue->reader.waitcount, queue->writer.waitcount, s_threadsignal.sign0.waitcount, queue->next_and_nrofmsg);
+                  printf("usetry:%d rwait:%d wwait:%d wready:%d next_size:%x\n", usetry, queue->reader.waitcount, queue->writer.waitcount, s_threadsignal.sign0.waitcount, queue->next_size);
                   x = 0;
                }
             }
@@ -1023,6 +1064,7 @@ int main(void)
       TEST(0 == allocated_bytes(&nrofbytes));
 
       test_initfree();
+      test_query();
       test_trysend_single();
       test_send_single();
       test_tryrecv_single();
