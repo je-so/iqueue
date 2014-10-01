@@ -35,19 +35,19 @@ typedef struct iqmsg_t {
 } iqmsg_t;
 
 typedef struct iqueue_t {
-   uint16_t size;
-   uint32_t next_and_nrofmsg;
+   uint16_t capacity;
+   uint32_t next_size;
    uint32_t closed;
    iqsignal0_t reader;
    iqsignal0_t writer;
-   void*   msg[/*size*/];
+   void*   msg[/*capacity*/];
 } iqueue_t;
 
 // === iqueue_t ===
 
 // Initializes queue
 // Possible error codes: ENOMEM
-int new_iqueue(/*out*/iqueue_t** queue, uint16_t size);
+int new_iqueue(/*out*/iqueue_t** queue, uint16_t capacity);
 
 // Frees all resources of queue. Close is called automatically.
 int delete_iqueue(iqueue_t** queue);
@@ -71,6 +71,18 @@ int tryrecv_iqueue(iqueue_t* queue, /*out*/void** msg);
 // Receives msg from queue. Blocks if queue is empty.
 // EPIPE is returned if queue is closed.
 int recv_iqueue(iqueue_t* queue, /*out*/void** msg);
+
+// Returns maximum number of storable messages.
+static inline uint16_t capacity_iqueue(const iqueue_t* queue)
+{
+         return queue->capacity;
+}
+
+// Returns number of stored (unread) messages.
+static inline uint16_t size_iqueue(const iqueue_t* queue)
+{
+         return (uint16_t) cmpxchg_atomicu32((uint32_t*)(uintptr_t)&queue->next_size, 0, 0);
+}
 
 // === iqsignal_t ===
 
@@ -126,15 +138,15 @@ static inline void setprocessed_iqmsg(iqmsg_t* msg)
 // === support for statically typed queues ===
 
 /* Declares/implements queue type affix##_t and whole iqueue interface
- * where msg type (void*) is replaced with type (msg_t*). 
+ * where msg type (void*) is replaced with type (msg_t*).
  * Use init_##affix / free_##affix to initialize/free queue. */
 #define iqueue_DECLARE(affix, msg_t) \
          typedef struct affix ##_t { \
             iqueue_t* queue;          \
          } affix ##_t;               \
-         static inline int init_##affix(affix##_t* queue, uint16_t size) \
+         static inline int init_##affix(affix##_t* queue, uint16_t capacity) \
          { \
-            return new_iqueue(&queue->queue, size); \
+            return new_iqueue(&queue->queue, capacity); \
          } \
          static inline int free_##affix(affix##_t* queue) \
          { \
