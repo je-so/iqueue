@@ -366,3 +366,136 @@ int recv_iqueue(iqueue_t* queue, /*out*/void** msg)
 
    return err;
 }
+
+// === iqueue1_t ===
+
+int trysend_nowakeup_iqueue1(iqueue1_t* queue, void* msg)
+{
+   if (msg == 0) {
+      return EINVAL;
+   }
+
+   uint16_t pos = queue->writepos;
+   uint16_t newpos = (uint16_t) (pos + 1);
+   if (newpos >= queue->capacity) {
+      newpos = 0;
+   }
+
+   if (queue->closed) {
+      return EPIPE;
+   }
+
+   if (0 != cmpxchg_atomicptr(&queue->msg[pos], 0, msg)) {
+      return EAGAIN;
+   }
+
+   queue->writepos = newpos;
+
+   return 0;
+}
+
+int tryrecv_nowakeup_iqueue1(iqueue1_t* queue, /*out*/void** msg)
+{
+   if (msg == 0) {
+      return EINVAL;
+   }
+
+   uint16_t pos = queue->readpos;
+   uint16_t newpos = (uint16_t) (pos + 1);
+   if (newpos >= queue->capacity) {
+      newpos = 0;
+   }
+
+   if (queue->closed) {
+      return EPIPE;
+   }
+
+   void* fetchedmsg = queue->msg[pos];
+   if (fetchedmsg != cmpxchg_atomicptr(&queue->msg[pos], fetchedmsg, 0) || fetchedmsg == 0) {
+      return EAGAIN;
+   }
+
+   *msg = fetchedmsg;
+   queue->readpos = newpos;
+
+   return 0;
+}
+
+int trysend_iqueue1(iqueue1_t* queue, void* msg)
+{
+   int err = trysend_nowakeup_iqueue1(queue, msg);
+
+   WAKEUP_READER();
+
+   return err;
+}
+
+int tryrecv_iqueue1(iqueue1_t* queue, /*out*/void** msg)
+{
+   int err = tryrecv_nowakeup_iqueue1(queue, msg);
+
+   WAKEUP_WRITER();
+
+   return err;
+}
+
+int send_iqueue1(iqueue1_t* queue, void* msg)
+{
+   int err = trysend_nowakeup_iqueue1(queue, msg);
+
+   if (EAGAIN == err) {
+      pthread_mutex_lock(&queue->writer.lock);
+      ++ queue->writer.waitcount;
+
+      for (;;) {
+         err = trysend_nowakeup_iqueue1(queue, msg);
+         if (EAGAIN != err) break;
+         pthread_cond_wait(&queue->writer.cond, &queue->writer.lock);
+      }
+
+      -- queue->writer.waitcount;
+      pthread_mutex_unlock(&queue->writer.lock);
+   }
+
+   WAKEUP_READER();
+
+   return err;
+}
+
+int recv_iqueue1(iqueue1_t* queue, /*out*/void** msg)
+{
+   int err = tryrecv_nowakeup_iqueue1(queue, msg);
+
+   if (EAGAIN == err) {
+      pthread_mutex_lock(&queue->reader.lock);
+      ++ queue->reader.waitcount;
+
+      for (;;) {
+         err = tryrecv_nowakeup_iqueue1(queue, msg);
+         if (EAGAIN != err) break;
+         pthread_cond_wait(&queue->reader.cond, &queue->reader.lock);
+      }
+
+      -- queue->reader.waitcount;
+      pthread_mutex_unlock(&queue->reader.lock);
+   }
+
+   WAKEUP_WRITER();
+
+   return err;
+}
+
+uint16_t size_iqueue1(const iqueue1_t* queue)
+{
+   uint16_t rpos = queue->readpos;
+   uint16_t wpos = queue->writepos;
+   if (rpos < wpos) {
+      return (uint16_t) (wpos - rpos);
+
+   } else {
+      uint16_t free = (uint16_t) (rpos - wpos);
+      return (free == 0 && 0 == queue->msg[wpos == 0?queue->capacity-1:wpos-1])
+             ? 0
+             : (uint16_t) (queue->capacity - free);
+   }
+}
