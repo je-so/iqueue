@@ -11,7 +11,8 @@ It is designed to allow for zero-copy message transfer.
 It is up to 4 times faster than type iqueue_t (see [example4.c](example4.c)).
 
 **iqueue_t:** This type supports multiple readers and writers. Which makes it necessary
-to synchronize more state.
+to synchronize more state. Compare [trysend_nowakeup_iqueue](https://github.com/je-so/iqueue/blob/master/src/iqueue.c#L217) with [trysend_nowakeup_iqueue1](https://github.com/je-so/iqueue/blob/master/src/iqueue.c#L372).
+
 
 The following examples use iqueue_t.
 
