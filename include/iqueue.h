@@ -15,6 +15,7 @@
 #define IQUEUE_H
 
 #include <pthread.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "atomic.h"
 
@@ -34,6 +35,7 @@ typedef struct iqmsg_t {
    uint32_t processed;
 } iqmsg_t;
 
+// Supports multi reader / multi writer
 typedef struct iqueue_t {
    uint16_t capacity;
    uint32_t next_size;
@@ -43,10 +45,21 @@ typedef struct iqueue_t {
    void*   msg[/*capacity*/];
 } iqueue_t;
 
+// Supports single reader / single writer
+typedef struct iqueue1_t {
+   uint16_t capacity;
+   uint16_t readpos;
+   uint16_t writepos;
+   uint32_t closed;
+   iqsignal0_t reader;
+   iqsignal0_t writer;
+   void*   msg[/*capacity*/];
+} iqueue1_t;
+
 // === iqueue_t ===
 
 // Initializes queue
-// Possible error codes: ENOMEM
+// Possible error codes: EINVAL (capacity == 0) or ENOMEM
 int new_iqueue(/*out*/iqueue_t** queue, uint16_t capacity);
 
 // Frees all resources of queue. Close is called automatically.
@@ -134,6 +147,64 @@ static inline void setprocessed_iqmsg(iqmsg_t* msg)
             signal_iqsignal(msg->signal);
          }
 }
+
+// === iqueue1_t ===
+
+#define static_assert(C,S) \
+         ((void)(sizeof(char[(C)?1:-1])))
+
+// Initializes queue
+// Possible error codes: EINVAL (capacity == 0) or ENOMEM
+static inline int new_iqueue1(/*out*/iqueue1_t** queue, uint16_t capacity)
+{
+         iqueue_t* tmp;
+         int err = new_iqueue(&tmp, capacity);
+         static_assert( offsetof(iqueue1_t, closed) == offsetof(iqueue_t, closed),
+                        "iqueue_t can be cast to iqueue1_t");
+         *queue = (iqueue1_t*) tmp;
+         return err;
+}
+
+// Frees all resources of queue. Close is called automatically.
+static inline int delete_iqueue1(iqueue1_t** queue)
+{
+         iqueue_t* tmp = (iqueue_t*) *queue;
+         int err = delete_iqueue(&tmp);
+         *queue = 0;
+         return err;
+}
+
+// Marks queue as closed and wakes up any waiting reader/writer.
+// Blocks until all read/writer has left queue.
+static inline void close_iqueue1(iqueue1_t* queue)
+{
+         close_iqueue((iqueue_t*) queue);
+}
+
+// Stores msg in queue. EAGAIN is returned if queue is full.
+// EPIPE is returned if queue is closed.
+int trysend_iqueue1(iqueue1_t* queue, void* msg);
+
+// Stores msg in queue. Blocks if queue is full.
+// EPIPE is returned if queue is closed.
+int send_iqueue1(iqueue1_t* queue, void* msg);
+
+// Receives msg from queue. EAGAIN is returned if queue is empty.
+// EPIPE is returned if queue is closed.
+int tryrecv_iqueue1(iqueue1_t* queue, /*out*/void** msg);
+
+// Receives msg from queue. Blocks if queue is empty.
+// EPIPE is returned if queue is closed.
+int recv_iqueue1(iqueue1_t* queue, /*out*/void** msg);
+
+// Returns maximum number of storable messages.
+static inline uint16_t capacity_iqueue1(const iqueue1_t* queue)
+{
+         return queue->capacity;
+}
+
+// Returns number of stored (unread) messages.
+uint16_t size_iqueue1(const iqueue1_t* queue);
 
 // === support for statically typed queues ===
 
