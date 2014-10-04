@@ -33,7 +33,7 @@ iqueue: bin/iqueue.a bin/iqueue_debug.a
 
 test: bin/iqueue_test bin/iqueue_test_debug
 
-examples: example1 example2 example3
+examples: example1 example2 example3 example4
 
 run: bin/iqueue_test
 	@bin/iqueue_test
