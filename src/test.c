@@ -1051,6 +1051,281 @@ void test_multi_sendrecv(void)
    }
 }
 
+static void test_initfree1(void)
+{
+   pthread_t thr;
+   iqueue1_t* queue = 0;
+
+   // TEST new_iqueue
+   TEST(0 == new_iqueue1(&queue, 12345));
+   TEST(0 != queue);
+   TEST(12345 == queue->capacity);
+   TEST(0 == queue->readpos);
+   TEST(0 == queue->writepos);
+   TEST(0 == queue->closed);
+   TEST(0 == queue->reader.waitcount);
+   TEST(0 == queue->writer.waitcount);
+   for (size_t i = 0; i < queue->capacity; ++i) {
+      TEST(0 == queue->msg[i]);
+   }
+   // test writelock + writecond
+   TEST(0 == pthread_create(&thr, 0, &thr_lock, queue));
+   for (int i = 0; i < 100000; ++i) {
+      if (0 != cmpxchg_atomicu32(&queue->closed, 0, 0)) break;
+      sched_yield();
+   }
+   // thr_lock is waiting on writecond
+   TEST(1 == cmpxchg_atomicu32(&queue->closed, 0, 0));
+   TEST(0 == pthread_mutex_lock(&queue->writer.lock));
+   TEST(0 == pthread_cond_signal(&queue->writer.cond));
+   for (int i = 0; i < 10; ++i) {
+      sched_yield();
+      TEST(1 == cmpxchg_atomicu32(&queue->closed, 0, 0));
+   }
+   TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
+   for (int i = 0; i < 100000; ++i) {
+      if (1 != cmpxchg_atomicu32(&queue->closed, 0, 0)) break;
+      sched_yield();
+   }
+   // thr_lock is waiting on readcond
+   TEST(2 == cmpxchg_atomicu32(&queue->closed, 0, 0));
+   TEST(0 == pthread_mutex_lock(&queue->reader.lock));
+   TEST(0 == pthread_cond_signal(&queue->reader.cond));
+   for (int i = 0; i < 10; ++i) {
+      sched_yield();
+      TEST(2 == cmpxchg_atomicu32(&queue->closed, 0, 0));
+   }
+   TEST(0 == pthread_mutex_unlock(&queue->reader.lock));
+   TEST(0 == pthread_join(thr, 0));
+   TEST(3 == cmpxchg_atomicu32(&queue->closed, 0, 0));
+   PASS();
+
+   // TEST delete_iqueue
+   TEST(0 == delete_iqueue1(&queue));
+   TEST(0 == queue);
+   PASS();
+
+   // TEST new_iqueue: different size parameter
+   for (size_t s = 1; s < 65536; s = (s << 1) + 33) {
+      TEST(0 == new_iqueue1(&queue, (uint16_t) s));
+      TEST(0 != queue);
+      TEST(s == queue->capacity);
+      TEST(0 == queue->readpos);
+      TEST(0 == queue->writepos);
+      TEST(0 == queue->closed);
+      TEST(0 == queue->reader.waitcount);
+      TEST(0 == queue->writer.waitcount);
+      for (size_t i = 0; i < queue->capacity; ++i) {
+         TEST(0 == queue->msg[i]);
+      }
+      TEST(0 == delete_iqueue1(&queue));
+      TEST(0 == queue);
+   }
+   PASS();
+
+   // TEST new_iqueue: EINVAL
+   TEST(EINVAL == new_iqueue1(&queue, 0));
+   PASS();
+}
+
+static void test_query1(void)
+{
+   iqueue1_t* queue = 0;
+
+   // prepare
+   TEST(0 == new_iqueue1(&queue, 128));
+
+   // TEST capacity_iqueue
+   TEST(128 == capacity_iqueue1(queue));
+   PASS();
+
+   // TEST size_iqueue
+   TEST(0 == size_iqueue1(queue));
+   PASS();
+
+   // TEST capacity_iqueue1: returns value from size
+   queue->capacity = 0;
+   TEST(0 == capacity_iqueue1(queue));
+   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
+      queue->capacity = i;
+      TEST(i == capacity_iqueue1(queue));
+   }
+   queue->capacity = 128;
+   PASS();
+
+   // TEST size_iqueue: readpos < writepos
+   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
+      queue->readpos  = 0;
+      queue->writepos = i;
+      TEST(i == size_iqueue1(queue));
+   }
+   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
+      for (uint16_t s = 10; s; --s) {
+         queue->readpos = i;
+         queue->writepos = (uint16_t) (i+s);
+         TEST(s == size_iqueue1(queue));
+      }
+   }
+   PASS();
+
+   // TEST size_iqueue: writepos < readpos
+   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
+      for (uint16_t c = 65535; c >= 32768; c = (uint16_t)(c - (~c + 1))) {
+         queue->capacity = c;
+         queue->readpos  = i;
+         queue->writepos = 0;
+         TEST((c - i) == size_iqueue1(queue));
+      }
+   }
+   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
+      for (uint16_t s = 10; s; --s) {
+         for (uint16_t c = 65535; c >= 32768; c = (uint16_t)(c - (~c + 1))) {
+            queue->capacity = c;
+            queue->readpos = (uint16_t) (i+s);;
+            queue->writepos = i;
+            TEST((c-s) == size_iqueue1(queue));
+         }
+      }
+   }
+   queue->capacity = 128;
+   PASS();
+
+   // TEST size_iqueue: writepos == readpos
+   for (uint16_t c = 1; c <= 128; ++c) {
+      // writepos == 0
+      queue->capacity = c;
+      queue->readpos  = 0;
+      queue->writepos = 0;
+      TEST(0 == size_iqueue1(queue));
+      queue->msg[c-1] = (void*) 1;
+      TEST(c == size_iqueue1(queue));
+      queue->msg[c-1] = (void*) 0;
+   }
+   for (uint16_t i = 1; i < 128; ++i) {
+      for (uint16_t c = 1; c <= 128; ++c) {
+         // writepos > 0
+         queue->capacity = c;
+         queue->readpos  = i;
+         queue->writepos = i;
+         TEST(0 == size_iqueue1(queue));
+         queue->msg[i-1] = (void*) 1;
+         TEST(c == size_iqueue1(queue));
+         queue->msg[i-1] = (void*) 0;
+      }
+   }
+   PASS();
+
+   // unprepare
+   TEST(0 == delete_iqueue1(&queue));
+}
+
+void* thread_sendrange1(void* queue)
+{
+   uint32_t myid = 0;
+   struct range_t msg[2*QUEUESIZE];
+
+   for (uint32_t nr = 0; nr < 2*QUEUESIZE; ++nr) {
+      msg[nr].nr = MAXRANGE;
+   }
+
+   for (uint32_t nr = 0; nr < MAXRANGE; ++nr) {
+      uint32_t m = nr % (2*QUEUESIZE);
+      while (MAXRANGE != cmpxchg_atomicu32(&msg[m].nr, MAXRANGE, 0)) {
+         sched_yield(); // message in use
+      }
+      msg[m].tid = myid;
+      msg[m].nr  = nr;
+
+      for (int i = 0; ; ++i) {
+         int err = s_threadtry ? trysend_iqueue1(queue, (iqmsg_t*) &msg[m]) : send_iqueue1(queue, (iqmsg_t*) &msg[m]);
+         if (err == 0) break;
+         TEST(s_threadtry && err == EAGAIN);
+         sched_yield();
+         if (i == 1000000) {
+            printf("Sender starvation\n");
+            exit(1);
+         }
+      }
+   }
+
+   wait_iqsignal(&s_threadsignal);
+
+   return 0;
+}
+
+void* thread_recvrange1(void* queue)
+{
+   void* imsg;
+
+   for (;;) {
+      for (int i = 0; ; ++i) {
+         int err = s_threadtry ? tryrecv_iqueue1(queue, &imsg) : recv_iqueue1(queue, &imsg);
+         if (err == EPIPE) return 0;
+         if (err == 0) break;
+         TEST(err == EAGAIN);
+         sched_yield();
+         if (i == 1000000) {
+            printf("Receiver starvation\n");
+            exit(1);
+         }
+      }
+
+      struct range_t* rmsg = (struct range_t*) imsg;
+      TEST(rmsg->tid < MAXTHREAD);
+      TEST(rmsg->nr  < MAXRANGE);
+      s_flag[rmsg->tid][rmsg->nr] = (uint8_t) (s_flag[rmsg->tid][rmsg->nr] + 1);
+      // message processed
+      cmpxchg_atomicu32(&rmsg->nr, rmsg->nr, MAXRANGE);
+   }
+
+   return 0;
+}
+
+void test_single_sendrecv1(void)
+{
+   iqueue1_t* queue = 0;
+   pthread_t rthr;
+   pthread_t sthr;
+
+   for (int usetry = 0; usetry <= 1; ++usetry) {
+      memset(s_flag, 0, sizeof(s_flag));
+      // start threads
+      s_threadid  = 0;
+      s_threadtry = usetry;
+      TEST(0 == init_iqsignal(&s_threadsignal));
+      TEST(0 == new_iqueue1(&queue, QUEUESIZE));
+      TEST(0 == pthread_create(&sthr, 0, &thread_sendrange1, queue));
+      TEST(0 == pthread_create(&rthr, 0, &thread_recvrange1, queue));
+      for (int r = 0; r < MAXRANGE; ++r) {
+         int x = 0;
+         while (__sync_fetch_and_add(&s_flag[0][r], 0) == 0) {
+            sched_yield();
+            ++x;
+            if (x == 1000000) {
+               // DEBUG:
+               printf("usetry:%d rwait:%d wwait:%d wready:%d rpos:%d wpos:%d\n", usetry, queue->reader.waitcount, queue->writer.waitcount, s_threadsignal.sign0.waitcount, queue->readpos, queue->writepos);
+               x = 0;
+            }
+         }
+         // == DEBUG: PRINT PROGRESS (change 0 into 1) ==
+         if (0 && 0 == r % 1000) {
+            printf("%d: %d\n", 0, r);
+         }
+      }
+      close_iqueue1(queue);
+      // stop threads
+      TEST(0 == pthread_join(rthr, 0));
+      signal_iqsignal(&s_threadsignal);
+      TEST(0 == pthread_join(sthr, 0));
+      TEST(0 == delete_iqueue1(&queue));
+      TEST(0 == free_iqsignal(&s_threadsignal));
+      for (int r = 0; r < MAXRANGE; ++r) {
+         TEST(s_flag[0][r] == 1);
+      }
+      PASS();
+   }
+}
+
 int main(void)
 {
    size_t nrofbytes;
@@ -1063,6 +1338,8 @@ int main(void)
    for (int i = 0; i < 2; ++i) {
       TEST(0 == allocated_bytes(&nrofbytes));
 
+      // iqueue0_t
+
       test_initfree();
       test_query();
       test_trysend_single();
@@ -1073,6 +1350,12 @@ int main(void)
       test_iqsignal();
       test_iqmsg();
       test_multi_sendrecv();
+
+      // iqueue1_t
+
+      test_initfree1();
+      test_query1();
+      test_single_sendrecv1();
 
       TEST(0 == allocated_bytes(&nrofbytes2));
       if (nrofbytes == nrofbytes2) break;
