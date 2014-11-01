@@ -20,7 +20,9 @@ The following examples use iqueue_t.
 
 Only a pointer to the message is transfered. The message itself
 is not copied. The server responds to the client request with
-an error code and signals the client if the message is processed.
+an error code and signals the client if the message has been processed.
+Two implemented types *iqmsg_t* and *iqsignal_t* support the notification of a client 
+whenever a message has been processed.
 
 ```C
 #include "iqueue.h"
@@ -50,7 +52,7 @@ void* client(void* queue)
    iqsignal_t signal;
    struct echomsg_t msg = { iqmsg_INIT(&signal), "Hello Server", 1 };
    send_iqueue(queue, &msg);
-   wait_iqsignal(&signal); // wait until msg is processed
+   wait_iqsignal(&signal); // wait until msg was processed
    return (void*) msg.err;
 }
 
@@ -73,8 +75,11 @@ int main(void)
 ## Example with Busy Waiting
 
 A queue with size 3 is created. The client pushes 3 messages into the queue without waiting.
-The client waits in a busy loop until all messages has been processed.
-It checks the results and exits.
+The client waits in a busy loop until all messages has been processed. It does not call 
+*wait_iqsignal* but uses *signalcount_iqsignal* to check for all 3 messages.
+
+Then it checks that every message has been processed correctly.
+
 
 ```C
 #include "iqueue.h"
@@ -137,9 +142,7 @@ int main(void)
 
 ## Example with Unix Signals and Statically Typed Messages
 
-Same as first example. Only the client is signalled with help of Unix signals.
-Also macro iqueue_DECLARE is used to declare type echoqueue_t which supports
-messages of type *struct echomsg_t*.
+Shows usage of macro *iqueue_DECLARE*. Use it to make an iqueue_t type safe. It redeclares the fct_iqueue interface as fct_echoqueue and declares type echoqueue_t which mirrors iqueue_t. The redeclared interface processes messages of type *struct echomsg_t** instead of generic type void*. This example also shows the usage of Unix signals to signal the client of the fact that the server has processed the message.
 
 ```C
 
@@ -153,6 +156,8 @@ struct echomsg_t {
    pthread_t thread; // used to signal ready
 };
 
+// declare type echoqueue_t and interface fct_echoqueue 
+// which processes messages of type struct echomsg_t
 iqueue_DECLARE(echoqueue, struct echomsg_t)
 
 void* server(void* queue)
