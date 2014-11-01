@@ -25,7 +25,7 @@ void* client(void* queue)
    iqsignal_t signal;
    struct echomsg_t msg = { iqmsg_INIT(&signal), "Hello Server", 1 };
    send_iqueue(queue, &msg);
-   wait_iqsignal(&signal); // wait until msg is processed
+   wait_iqsignal(&signal); // wait until msg was processed
    return (void*) msg.err;
 }
 
