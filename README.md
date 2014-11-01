@@ -119,7 +119,7 @@ void* client(void* queue)
       // ... process other things ...
    }
    for (int i = 0; i < 3; ++i) {
-      assert(1 == msg[i].header.processed);
+      assert(isprocessed_iqmsg(&msg[i].header));
       assert(msg[i].sum == msg[i].arg1 + msg[i].arg2);
    }
    printf("Client: All messages processed\n");
