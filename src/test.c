@@ -1051,6 +1051,24 @@ void test_multi_sendrecv(void)
    }
 }
 
+static void* thr_lock1(void* param)
+{
+   iqueue1_t* queue = param;
+
+   TEST(0 == pthread_mutex_lock(&queue->writer.lock));
+   cmpxchg_atomicu32(&queue->closed, 0, 1);
+   TEST(0 == pthread_cond_wait(&queue->writer.cond, &queue->writer.lock));
+   TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
+
+   TEST(0 == pthread_mutex_lock(&queue->reader.lock));
+   cmpxchg_atomicu32(&queue->closed, 1, 2);
+   TEST(0 == pthread_cond_wait(&queue->reader.cond, &queue->reader.lock));
+   TEST(0 == pthread_mutex_unlock(&queue->reader.lock));
+   cmpxchg_atomicu32(&queue->closed, 2, 3);
+
+   return 0;
+}
+
 static void test_initfree1(void)
 {
    pthread_t thr;
@@ -1069,12 +1087,12 @@ static void test_initfree1(void)
       TEST(0 == queue->msg[i]);
    }
    // test writelock + writecond
-   TEST(0 == pthread_create(&thr, 0, &thr_lock, queue));
+   TEST(0 == pthread_create(&thr, 0, &thr_lock1, queue));
    for (int i = 0; i < 100000; ++i) {
       if (0 != cmpxchg_atomicu32(&queue->closed, 0, 0)) break;
       sched_yield();
    }
-   // thr_lock is waiting on writecond
+   // thr_lock1 is waiting on writecond
    TEST(1 == cmpxchg_atomicu32(&queue->closed, 0, 0));
    TEST(0 == pthread_mutex_lock(&queue->writer.lock));
    TEST(0 == pthread_cond_signal(&queue->writer.cond));

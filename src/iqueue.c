@@ -214,9 +214,9 @@ void close_iqueue(iqueue_t* queue)
    }
 }
 
-static int trysend_nowakeup_iqueue(iqueue_t* queue, void* msg)
+int trysend_nowakeup_iqueue(iqueue_t* queue, void* msg)
 {
-   if (msg == 0) {
+   if (0 == msg) {
       return EINVAL;
    }
 
@@ -251,7 +251,7 @@ static int trysend_nowakeup_iqueue(iqueue_t* queue, void* msg)
    return 0;
 }
 
-static int tryrecv_nowakeup_iqueue(iqueue_t* queue, /*out*/void** msg)
+int tryrecv_nowakeup_iqueue(iqueue_t* queue, /*out*/void** msg)
 {
    if (msg == 0) {
       return EINVAL;
@@ -369,54 +369,140 @@ int recv_iqueue(iqueue_t* queue, /*out*/void** msg)
 
 // === iqueue1_t ===
 
-int trysend_nowakeup_iqueue1(iqueue1_t* queue, void* msg)
+int new_iqueue1(/*out*/iqueue1_t** queue, uint32_t capacity)
 {
-   if (msg == 0) {
+   if (capacity == 0 || ((size_t)-1 - sizeof(iqueue1_t))/sizeof(void*) <= capacity) {
       return EINVAL;
    }
 
-   uint16_t pos = queue->writepos;
-   uint16_t newpos = (uint16_t) (pos + 1);
-   if (newpos >= queue->capacity) {
-      newpos = 0;
+   size_t queuesize = sizeof(iqueue1_t) + capacity * sizeof(void*);
+   iqueue1_t* allocated_queue = (iqueue1_t*) malloc(queuesize);
+
+   if (!allocated_queue) {
+      return ENOMEM;
+   }
+
+   memset(allocated_queue, 0, queuesize);
+   allocated_queue->capacity = capacity;
+
+   int err;
+   int initcount = 0;
+
+   err = init_iqsignal0(&allocated_queue->reader);
+   if (err) goto ONERR;
+   initcount = 1;
+
+   err = init_iqsignal0(&allocated_queue->writer);
+   if (err) goto ONERR;
+   // initcount = 2;
+
+   *queue = allocated_queue;
+
+   return 0; /*OK*/
+ONERR:
+   switch (initcount) {
+   case 1: free_iqsignal0(&allocated_queue->reader);
+   case 0: break;
+   }
+   free(allocated_queue);
+   return err;
+}
+
+int delete_iqueue1(iqueue1_t** queue)
+{
+   int err = 0;
+   int err2;
+
+   if (*queue) {
+
+      close_iqueue1(*queue);
+
+      err = free_iqsignal0(&(*queue)->writer);
+      err2 = free_iqsignal0(&(*queue)->reader);
+      if (err2) err = err2;
+
+      free(*queue);
+
+      *queue = 0;
+   }
+
+   return err;
+}
+
+void close_iqueue1(iqueue1_t* queue)
+{
+   pthread_mutex_lock(&queue->reader.lock);
+   pthread_mutex_lock(&queue->writer.lock);
+   queue->closed = 1;
+   pthread_mutex_unlock(&queue->writer.lock);
+   pthread_mutex_unlock(&queue->reader.lock);
+
+   // Wait until reader/writer woken up
+   for (;;) {
+      pthread_mutex_lock(&queue->reader.lock);
+      pthread_cond_broadcast(&queue->reader.cond);
+      size_t isreader = queue->reader.waitcount;
+      pthread_mutex_unlock(&queue->reader.lock);
+
+      pthread_mutex_lock(&queue->writer.lock);
+      pthread_cond_broadcast(&queue->writer.cond);
+      size_t iswriter = queue->writer.waitcount;
+      pthread_mutex_unlock(&queue->writer.lock);
+
+      if (!isreader && !iswriter) break;
+
+      sched_yield();
+   }
+}
+
+int trysend_nowakeup_iqueue1(iqueue1_t* queue, void* msg)
+{
+   if (0 == msg) {
+      return EINVAL;
    }
 
    if (queue->closed) {
       return EPIPE;
    }
 
-   if (0 != cmpxchg_atomicptr(&queue->msg[pos], 0, msg)) {
+   uint32_t pos = queue->writepos;
+   uint32_t oldpos = pos;
+   ++pos;
+   if (pos >= queue->capacity) {
+      pos = 0;
+   }
+   queue->writepos = pos;
+
+   if (0 != cmpxchg_atomicptr(&queue->msg[oldpos], 0, msg)) {
+      queue->writepos = oldpos;
       return EAGAIN;
    }
-
-   queue->writepos = newpos;
 
    return 0;
 }
 
 int tryrecv_nowakeup_iqueue1(iqueue1_t* queue, /*out*/void** msg)
 {
-   if (msg == 0) {
-      return EINVAL;
-   }
-
-   uint16_t pos = queue->readpos;
-   uint16_t newpos = (uint16_t) (pos + 1);
-   if (newpos >= queue->capacity) {
-      newpos = 0;
-   }
-
    if (queue->closed) {
       return EPIPE;
    }
 
-   void* fetchedmsg = queue->msg[pos];
-   if (fetchedmsg != cmpxchg_atomicptr(&queue->msg[pos], fetchedmsg, 0) || fetchedmsg == 0) {
+   uint32_t pos = queue->readpos;
+   uint32_t oldpos = pos;
+   ++pos;
+   if (pos >= queue->capacity) {
+      pos = 0;
+   }
+   queue->readpos = pos;
+
+   void* fetchedmsg = queue->msg[oldpos];
+
+   if (fetchedmsg != cmpxchg_atomicptr(&queue->msg[oldpos], fetchedmsg, 0) || 0 == fetchedmsg) {
+      queue->readpos = oldpos;
       return EAGAIN;
    }
 
    *msg = fetchedmsg;
-   queue->readpos = newpos;
 
    return 0;
 }
@@ -485,17 +571,18 @@ int recv_iqueue1(iqueue1_t* queue, /*out*/void** msg)
    return err;
 }
 
-uint16_t size_iqueue1(const iqueue1_t* queue)
+uint32_t size_iqueue1(const iqueue1_t* queue)
 {
-   uint16_t rpos = queue->readpos;
-   uint16_t wpos = queue->writepos;
+   uint32_t rpos = cmpxchg_atomicu32((uint32_t*)(uintptr_t)&queue->readpos, 0, 0);
+   uint32_t wpos = cmpxchg_atomicu32((uint32_t*)(uintptr_t)&queue->writepos, 0, 0);
+
    if (rpos < wpos) {
-      return (uint16_t) (wpos - rpos);
+      return (wpos - rpos);
 
    } else {
-      uint16_t free = (uint16_t) (rpos - wpos);
+      uint32_t free = (rpos - wpos);
       return (free == 0 && 0 == queue->msg[wpos == 0?queue->capacity-1:wpos-1])
              ? 0
-             : (uint16_t) (queue->capacity - free);
+             : (queue->capacity - free);
    }
 }
