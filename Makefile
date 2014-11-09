@@ -8,7 +8,7 @@ CFLAGS += -std=c99 -pedantic -Wall -Wextra -Wconversion -Wshadow
 CFLAGS += -Wcast-qual -Wwrite-strings -Wstrict-prototypes 
 CFLAGS += -Wformat-nonliteral -Wformat-y2k
 CFLAGS_debug   := $(CFLAGS) -g
-CFLAGS_release := $(CFLAGS) -O2
+CFLAGS_release := $(CFLAGS) -O3
 
 LIBS := -lpthread
 
