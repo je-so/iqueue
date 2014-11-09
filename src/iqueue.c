@@ -214,7 +214,7 @@ void close_iqueue(iqueue_t* queue)
    }
 }
 
-int trysend_nowakeup_iqueue(iqueue_t* queue, void* msg)
+int trysend_iqueue(iqueue_t* queue, void* msg)
 {
    if (0 == msg) {
       return EINVAL;
@@ -251,12 +251,8 @@ int trysend_nowakeup_iqueue(iqueue_t* queue, void* msg)
    return 0;
 }
 
-int tryrecv_nowakeup_iqueue(iqueue_t* queue, /*out*/void** msg)
+int tryrecv_iqueue(iqueue_t* queue, /*out*/void** msg)
 {
-   if (msg == 0) {
-      return EINVAL;
-   }
-
    for (;;) {
       uint32_t oldval = cmpxchg_atomicu32(&queue->next_size, 0, 0);
       uint16_t next = (uint16_t) (oldval >> 16);
@@ -290,79 +286,67 @@ int tryrecv_nowakeup_iqueue(iqueue_t* queue, /*out*/void** msg)
 }
 
 #define WAKEUP_READER() \
-   if (!err && queue->reader.waitcount) {        \
+   if (queue->reader.waitcount) {                \
       pthread_mutex_lock(&queue->reader.lock);   \
       pthread_cond_signal(&queue->reader.cond);  \
       pthread_mutex_unlock(&queue->reader.lock); \
    }
 
 #define WAKEUP_WRITER() \
-   if (!err && queue->writer.waitcount) {        \
+   if (queue->writer.waitcount) {                \
       pthread_mutex_lock(&queue->writer.lock);   \
       pthread_cond_signal(&queue->writer.cond);  \
       pthread_mutex_unlock(&queue->writer.lock); \
    }
 
-int trysend_iqueue(iqueue_t* queue, void* msg)
-{
-   int err = trysend_nowakeup_iqueue(queue, msg);
-
-   WAKEUP_READER();
-
-   return err;
-}
-
-int tryrecv_iqueue(iqueue_t* queue, /*out*/void** msg)
-{
-   int err = tryrecv_nowakeup_iqueue(queue, msg);
-
-   WAKEUP_WRITER();
-
-   return err;
-}
-
 int send_iqueue(iqueue_t* queue, void* msg)
 {
-   int err = trysend_nowakeup_iqueue(queue, msg);
+   int err = trysend_iqueue(queue, msg);
+
+   WAKEUP_READER();
 
    if (EAGAIN == err) {
       pthread_mutex_lock(&queue->writer.lock);
       ++ queue->writer.waitcount;
 
       for (;;) {
-         err = trysend_nowakeup_iqueue(queue, msg);
+         err = trysend_iqueue(queue, msg);
          if (EAGAIN != err) break;
          pthread_cond_wait(&queue->writer.cond, &queue->writer.lock);
       }
 
       -- queue->writer.waitcount;
       pthread_mutex_unlock(&queue->writer.lock);
+      if (!err) {
+         WAKEUP_READER();
+      }
    }
-
-   WAKEUP_READER();
 
    return err;
 }
 
 int recv_iqueue(iqueue_t* queue, /*out*/void** msg)
 {
-   int err = tryrecv_nowakeup_iqueue(queue, msg);
+   int err = tryrecv_iqueue(queue, msg);
+
+   WAKEUP_WRITER();
 
    if (EAGAIN == err) {
       pthread_mutex_lock(&queue->reader.lock);
       ++ queue->reader.waitcount;
 
       for (;;) {
-         err = tryrecv_nowakeup_iqueue(queue, msg);
+         err = tryrecv_iqueue(queue, msg);
          if (EAGAIN != err) break;
          pthread_cond_wait(&queue->reader.cond, &queue->reader.lock);
       }
 
       -- queue->reader.waitcount;
       pthread_mutex_unlock(&queue->reader.lock);
+      if (!err) {
+         WAKEUP_WRITER();
+      }
    }
-
-   WAKEUP_WRITER();
 
    return err;
 }
@@ -455,7 +439,7 @@ void close_iqueue1(iqueue1_t* queue)
    }
 }
 
-int trysend_nowakeup_iqueue1(iqueue1_t* queue, void* msg)
+int trysend_iqueue1(iqueue1_t* queue, void* msg)
 {
    if (0 == msg) {
       return EINVAL;
@@ -481,7 +465,7 @@ int trysend_nowakeup_iqueue1(iqueue1_t* queue, void* msg)
    return 0;
 }
 
-int tryrecv_nowakeup_iqueue1(iqueue1_t* queue, /*out*/void** msg)
+int tryrecv_iqueue1(iqueue1_t* queue, /*out*/void** msg)
 {
    if (queue->closed) {
       return EPIPE;
@@ -507,66 +491,54 @@ int tryrecv_nowakeup_iqueue1(iqueue1_t* queue, /*out*/void** msg)
    return 0;
 }
 
-int trysend_iqueue1(iqueue1_t* queue, void* msg)
-{
-   int err = trysend_nowakeup_iqueue1(queue, msg);
-
-   WAKEUP_READER();
-
-   return err;
-}
-
-int tryrecv_iqueue1(iqueue1_t* queue, /*out*/void** msg)
-{
-   int err = tryrecv_nowakeup_iqueue1(queue, msg);
-
-   WAKEUP_WRITER();
-
-   return err;
-}
-
 int send_iqueue1(iqueue1_t* queue, void* msg)
 {
-   int err = trysend_nowakeup_iqueue1(queue, msg);
+   int err = trysend_iqueue1(queue, msg);
+
+   WAKEUP_READER();
 
    if (EAGAIN == err) {
       pthread_mutex_lock(&queue->writer.lock);
       ++ queue->writer.waitcount;
 
       for (;;) {
-         err = trysend_nowakeup_iqueue1(queue, msg);
+         err = trysend_iqueue1(queue, msg);
          if (EAGAIN != err) break;
          pthread_cond_wait(&queue->writer.cond, &queue->writer.lock);
       }
 
       -- queue->writer.waitcount;
       pthread_mutex_unlock(&queue->writer.lock);
+      if (!err) {
+         WAKEUP_READER();
+      }
    }
-
-   WAKEUP_READER();
 
    return err;
 }
 
 int recv_iqueue1(iqueue1_t* queue, /*out*/void** msg)
 {
-   int err = tryrecv_nowakeup_iqueue1(queue, msg);
+   int err = tryrecv_iqueue1(queue, msg);
+
+   WAKEUP_WRITER();
 
    if (EAGAIN == err) {
       pthread_mutex_lock(&queue->reader.lock);
       ++ queue->reader.waitcount;
 
       for (;;) {
-         err = tryrecv_nowakeup_iqueue1(queue, msg);
+         err = tryrecv_iqueue1(queue, msg);
          if (EAGAIN != err) break;
          pthread_cond_wait(&queue->reader.cond, &queue->reader.lock);
       }
 
       -- queue->reader.waitcount;
       pthread_mutex_unlock(&queue->reader.lock);
+      if (!err) {
+         WAKEUP_WRITER();
+      }
    }
-
-   WAKEUP_WRITER();
 
    return err;
 }

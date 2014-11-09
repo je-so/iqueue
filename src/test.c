@@ -272,7 +272,7 @@ static void test_query(void)
    TEST(0 == size_iqueue(queue));
    PASS();
 
-   // TEST capacity_iqueue: returns value from size
+   // TEST capacity_iqueue: returns value from capacity
    queue->capacity = 0;
    TEST(0 == capacity_iqueue(queue));
    for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
@@ -354,7 +354,7 @@ static void test_trysend_single(void)
    TEST(&msg[0] == queue->msg[0]);
    PASS();
 
-   // TEST trysend_iqueue: wakeup waiting reader
+   // TEST trysend_iqueue: does not wakeup waiting reader
    memset(queue->msg, 0, sizeof(queue->msg[0]) * queue->capacity);
    for (uint32_t i = 0; i < 10; ++i) {
       queue->next_size = (i << 16);
@@ -367,6 +367,15 @@ static void test_trysend_single(void)
       TEST(1 == queue->reader.waitcount);
       TEST(0 == pthread_mutex_unlock(&queue->reader.lock));
       TEST(0 == trysend_iqueue(queue, &msg[i]));
+      for (int wc = 0; wc < 100000; ++wc) {
+         sched_yield();
+         if (0 == cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0)) break;
+      }
+      TEST(1 == cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0));
+      // do wakeup
+      TEST(0 == pthread_mutex_lock(&queue->reader.lock));
+      TEST(0 == pthread_cond_signal(&queue->reader.cond));
+      TEST(0 == pthread_mutex_unlock(&queue->reader.lock));
       for (int wc = 0; wc < 100000; ++wc) {
          sched_yield();
          if (0 == cmpxchg_atomicsize(&queue->reader.waitcount, 0, 0)) break;
@@ -486,10 +495,6 @@ static void test_tryrecv_single(void)
    // prepare
    TEST(0 == new_iqueue(&queue, 10));
 
-   // TEST tryrecv_iqueue: EINVAL
-   TEST(EINVAL == tryrecv_iqueue(queue, 0));
-   PASS();
-
    // TEST tryrecv_iqueue: EPIPE
    queue->closed = 1;
    TEST(EPIPE == tryrecv_iqueue(queue, &rcv));
@@ -526,7 +531,7 @@ static void test_tryrecv_single(void)
       TEST(0 == trysend_iqueue(queue, &msg[i]));
    }
 
-   // TEST tryrecv_iqueue: wakeup waiting writer
+   // TEST tryrecv_iqueue: does not wakeup waiting writer
    for (unsigned i = 0; i < 10; ++i) {
       TEST(0 == pthread_create(&thr, 0, &thread_call_send, queue));
       for (int wc = 0; wc < 100000; ++wc) {
@@ -536,6 +541,15 @@ static void test_tryrecv_single(void)
       TEST(1 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0));
       TEST(0 == tryrecv_iqueue(queue, &rcv));
       TEST(rcv == &msg[i]);
+      for (int wc = 0; wc < 100000; ++wc) {
+         sched_yield();
+         if (0 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0)) break;
+      }
+      TEST(1 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0));
+      // do wakeup
+      TEST(0 == pthread_mutex_lock(&queue->writer.lock));
+      TEST(0 == pthread_cond_signal(&queue->writer.cond));
+      TEST(0 == pthread_mutex_unlock(&queue->writer.lock));
       for (int wc = 0; wc < 100000; ++wc) {
          sched_yield();
          if (0 == cmpxchg_atomicsize(&queue->writer.waitcount, 0, 0)) break;
@@ -570,10 +584,6 @@ static void test_recv_single(void)
 
    // prepare
    TEST(0 == new_iqueue(&queue, 10));
-
-   // TEST recv_iqueue: EINVAL
-   TEST(EINVAL == recv_iqueue(queue, 0));
-   PASS();
 
    // TEST recv_iqueue: EPIPE
    queue->closed = 1;
@@ -1161,10 +1171,10 @@ static void test_query1(void)
    TEST(0 == size_iqueue1(queue));
    PASS();
 
-   // TEST capacity_iqueue1: returns value from size
+   // TEST capacity_iqueue1: returns value from capacity
    queue->capacity = 0;
    TEST(0 == capacity_iqueue1(queue));
-   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
+   for (uint32_t i = 1; i; i = (uint16_t)(i << 1)) {
       queue->capacity = i;
       TEST(i == capacity_iqueue1(queue));
    }
@@ -1172,34 +1182,34 @@ static void test_query1(void)
    PASS();
 
    // TEST size_iqueue: readpos < writepos
-   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
+   for (uint32_t i = 1; i; i = (i << 1)) {
       queue->readpos  = 0;
       queue->writepos = i;
       TEST(i == size_iqueue1(queue));
    }
-   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
-      for (uint16_t s = 10; s; --s) {
+   for (uint32_t i = 1; i; i = (i << 1)) {
+      for (uint32_t s = 10; s; --s) {
          queue->readpos = i;
-         queue->writepos = (uint16_t) (i+s);
+         queue->writepos = (i+s);
          TEST(s == size_iqueue1(queue));
       }
    }
    PASS();
 
    // TEST size_iqueue: writepos < readpos
-   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
-      for (uint16_t c = 65535; c >= 32768; c = (uint16_t)(c - (~c + 1))) {
+   for (uint32_t i = 1; i; i = (i << 1)) {
+      for (uint32_t c = 65535; c >= 32768; c = (uint16_t)(c - (~c + 1))) {
          queue->capacity = c;
          queue->readpos  = i;
          queue->writepos = 0;
          TEST((c - i) == size_iqueue1(queue));
       }
    }
-   for (uint16_t i = 1; i; i = (uint16_t)(i << 1)) {
-      for (uint16_t s = 10; s; --s) {
-         for (uint16_t c = 65535; c >= 32768; c = (uint16_t)(c - (~c + 1))) {
+   for (uint32_t i = 1; i; i = (i << 1)) {
+      for (uint32_t s = 10; s; --s) {
+         for (uint32_t c = 65535; c >= 32768; c = (uint16_t)(c - (~c + 1))) {
             queue->capacity = c;
-            queue->readpos = (uint16_t) (i+s);;
+            queue->readpos = (i+s);
             queue->writepos = i;
             TEST((c-s) == size_iqueue1(queue));
          }
@@ -1209,7 +1219,7 @@ static void test_query1(void)
    PASS();
 
    // TEST size_iqueue: writepos == readpos
-   for (uint16_t c = 1; c <= 128; ++c) {
+   for (uint32_t c = 1; c <= 128; ++c) {
       // writepos == 0
       queue->capacity = c;
       queue->readpos  = 0;
@@ -1219,8 +1229,8 @@ static void test_query1(void)
       TEST(c == size_iqueue1(queue));
       queue->msg[c-1] = (void*) 0;
    }
-   for (uint16_t i = 1; i < 128; ++i) {
-      for (uint16_t c = 1; c <= 128; ++c) {
+   for (uint32_t i = 1; i < 128; ++i) {
+      for (uint32_t c = 1; c <= 128; ++c) {
          // writepos > 0
          queue->capacity = c;
          queue->readpos  = i;
@@ -1356,7 +1366,7 @@ int main(void)
    for (int i = 0; i < 2; ++i) {
       TEST(0 == allocated_bytes(&nrofbytes));
 
-      // iqueue0_t
+      // iqueue_t
 
       test_initfree();
       test_query();
