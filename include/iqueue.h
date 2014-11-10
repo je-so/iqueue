@@ -38,11 +38,14 @@ typedef struct iqmsg_t {
 // Supports multi reader / multi writer
 typedef struct iqueue_t {
    uint32_t closed;
-   uint16_t capacity;
+   uint32_t capacity;
+   uint32_t readpos;
+   uint32_t writepos;
    uint32_t next_size;
    iqsignal0_t reader;
    iqsignal0_t writer;
-   void*   msg[/*capacity*/];
+   uint8_t* isvalid;
+   void*    msg[/*capacity*/];
 } iqueue_t;
 
 // Supports single reader / single writer
@@ -60,7 +63,7 @@ typedef struct iqueue1_t {
 
 // Initializes queue
 // Possible error codes: EINVAL (capacity == 0) or ENOMEM
-int new_iqueue(/*out*/iqueue_t** queue, uint16_t capacity);
+int new_iqueue(/*out*/iqueue_t** queue, uint32_t capacity);
 
 // Frees all resources of queue. Close is called automatically.
 int delete_iqueue(iqueue_t** queue);
@@ -88,7 +91,7 @@ int tryrecv_iqueue(iqueue_t* queue, /*out*/void** msg);
 int recv_iqueue(iqueue_t* queue, /*out*/void** msg);
 
 // Returns maximum number of storable messages.
-static inline uint16_t capacity_iqueue(const iqueue_t* queue)
+static inline uint32_t capacity_iqueue(const iqueue_t* queue)
 {
          return queue->capacity;
 }

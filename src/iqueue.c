@@ -128,13 +128,15 @@ uint32_t clearsignal_iqsignal(iqsignal_t * signal)
 
 // === iqueue_t ===
 
-int new_iqueue(/*out*/iqueue_t** queue, uint16_t capacity)
+int new_iqueue(/*out*/iqueue_t** queue, uint32_t capacity)
 {
-   if (capacity == 0) {
+   if (capacity == 0 || ((size_t)-1 - sizeof(iqueue_t))/(sizeof(uint8_t)+sizeof(void*)) <= capacity) {
       return EINVAL;
    }
 
-   size_t queuesize = sizeof(iqueue_t) + (uint32_t)capacity * sizeof(void*);
+   capacity = 8192; // TODO:
+
+   size_t queuesize = sizeof(iqueue_t) + capacity * (sizeof(uint8_t)+sizeof(void*));
    iqueue_t* allocated_queue = (iqueue_t*) malloc(queuesize);
 
    if (!allocated_queue) {
@@ -143,6 +145,7 @@ int new_iqueue(/*out*/iqueue_t** queue, uint16_t capacity)
 
    memset(allocated_queue, 0, queuesize);
    allocated_queue->capacity = capacity;
+   allocated_queue->isvalid = (uint8_t*)allocated_queue + (sizeof(iqueue_t) + capacity * sizeof(void*));
 
    int err;
    int initcount = 0;
@@ -220,67 +223,41 @@ int trysend_iqueue(iqueue_t* queue, void* msg)
       return EINVAL;
    }
 
-   for (;;) {
-      uint32_t oldval  = cmpxchg_atomicu32(&queue->next_size, 0, 0);
-      uint16_t next = (uint16_t) (oldval >> 16);
-      uint16_t size = (uint16_t) oldval;
-      unsigned pos = next + (unsigned) size;
-      if (pos >= queue->capacity) {
-         pos -= queue->capacity;
-      }
+   uint32_t pos = fetchadd_atomicu32(&queue->writepos, 1);
+   pos &= (queue->capacity-1);
 
-      if (queue->closed) {
-         return EPIPE;
-      }
-
-      if (size >= queue->capacity) {
-         return EAGAIN;
-      }
-
-      ++ size;
-      uint32_t newval = ((uint32_t)next << 16) + size;
-
-      if (0 == cmpxchg_atomicptr(&queue->msg[pos], 0, msg)) {
-         if (oldval == cmpxchg_atomicu32(&queue->next_size, oldval, newval)) {
-            break;
-         }
-         cmpxchg_atomicptr(&queue->msg[pos], msg, 0);
-      }
+   if (queue->closed) {
+      return EPIPE;
    }
+
+   if (0 != cmpxchg_atomicu8(&queue->isvalid[pos], 0, 1)) {
+      return EAGAIN;
+   }
+
+   while (0 != cmpxchg_atomicptr(&queue->msg[pos], 0, msg)) ;
 
    return 0;
 }
 
 int tryrecv_iqueue(iqueue_t* queue, /*out*/void** msg)
 {
-   for (;;) {
-      uint32_t oldval = cmpxchg_atomicu32(&queue->next_size, 0, 0);
-      uint16_t next = (uint16_t) (oldval >> 16);
-      uint16_t size = (uint16_t) oldval;
-      unsigned pos = next;
+   uint32_t pos = fetchadd_atomicu32(&queue->readpos, 1);
+   pos &= (queue->capacity-1);
 
-      if (queue->closed) {
-         return EPIPE;
-      }
-
-      if (!size) {
-         return EAGAIN;
-      }
-
-      -- size;
-      ++ next;
-      if (next >= queue->capacity) {
-         next = 0;
-      }
-      uint32_t newval = ((uint32_t)next << 16) + size;
-
-      if (oldval == cmpxchg_atomicu32(&queue->next_size, oldval, newval)) {
-         void* fetchedmsg = queue->msg[pos];
-         cmpxchg_atomicptr(&queue->msg[pos], fetchedmsg, 0);
-         *msg = fetchedmsg;
-         break;
-      }
+   if (queue->closed) {
+      return EPIPE;
    }
+
+   if (1 != cmpxchg_atomicu8(&queue->isvalid[pos], 1, 0)) {
+      return EAGAIN;
+   }
+
+   void* fetchedmsg;
+   do {
+      fetchedmsg = queue->msg[pos];
+   } while (fetchedmsg != cmpxchg_atomicptr(&queue->msg[pos], fetchedmsg, 0) || 0 == fetchedmsg);
+
+   *msg = fetchedmsg;
 
    return 0;
 }
