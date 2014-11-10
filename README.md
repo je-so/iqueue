@@ -206,8 +206,5 @@ int main(void)
 
 ## Internal Workings ##
 
-The diagram shows the queue ring buffer which stores pointers to messages. A value of NULL indicates a free entry.
-Additional queue state is stored in the two logic variables *next* and *size*. Both logic variables are encoded 
-in one physical variable named next\_size to allow for a single *atomic_compare_exchange* operation.
+A new version is coming inspired by http://moodycamel.com/blog/2014/detailed-design-of-a-lock-free-queue.
 
-![](https://github.com/je-so/testcode/blob/master/img/iqueue.png)
