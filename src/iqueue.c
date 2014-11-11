@@ -277,16 +277,22 @@ int tryrecv_iqueue(iqueue_t* queue, /*out*/void** msg)
 }
 
 #define WAKEUP_READER() \
-   if (queue->reader.waitcount) {                \
+   if (!err && queue->reader.signalcount) {      \
       pthread_mutex_lock(&queue->reader.lock);   \
-      pthread_cond_signal(&queue->reader.cond);  \
+      if (queue->reader.signalcount) {           \
+         --queue->reader.signalcount;            \
+         pthread_cond_signal(&queue->reader.cond); \
+      }                                          \
       pthread_mutex_unlock(&queue->reader.lock); \
    }
 
 #define WAKEUP_WRITER() \
-   if (queue->writer.waitcount) {                \
+   if (!err && queue->writer.signalcount) {      \
       pthread_mutex_lock(&queue->writer.lock);   \
-      pthread_cond_signal(&queue->writer.cond);  \
+      if (queue->writer.signalcount) {           \
+         --queue->writer.signalcount;            \
+         pthread_cond_signal(&queue->writer.cond); \
+      }                                          \
       pthread_mutex_unlock(&queue->writer.lock); \
    }
 
@@ -303,14 +309,12 @@ int send_iqueue(iqueue_t* queue, void* msg)
       for (;;) {
          err = trysend_iqueue(queue, msg);
          if (EAGAIN != err) break;
+         ++ queue->writer.signalcount;
          pthread_cond_wait(&queue->writer.cond, &queue->writer.lock);
       }
 
       -- queue->writer.waitcount;
       pthread_mutex_unlock(&queue->writer.lock);
-      if (!err) {
-         WAKEUP_READER();
-      }
    }
 
    return err;
@@ -329,14 +333,12 @@ int recv_iqueue(iqueue_t* queue, /*out*/void** msg)
       for (;;) {
          err = tryrecv_iqueue(queue, msg);
          if (EAGAIN != err) break;
+         ++ queue->reader.signalcount;
          pthread_cond_wait(&queue->reader.cond, &queue->reader.lock);
       }
 
       -- queue->reader.waitcount;
       pthread_mutex_unlock(&queue->reader.lock);
-      if (!err) {
-         WAKEUP_WRITER();
-      }
    }
 
    return err;
@@ -505,14 +507,12 @@ int send_iqueue1(iqueue1_t* queue, void* msg)
       for (;;) {
          err = trysend_iqueue1(queue, msg);
          if (EAGAIN != err) break;
+         ++ queue->writer.signalcount;
          pthread_cond_wait(&queue->writer.cond, &queue->writer.lock);
       }
 
       -- queue->writer.waitcount;
       pthread_mutex_unlock(&queue->writer.lock);
-      if (!err) {
-         WAKEUP_READER();
-      }
    }
 
    return err;
@@ -531,14 +531,12 @@ int recv_iqueue1(iqueue1_t* queue, /*out*/void** msg)
       for (;;) {
          err = tryrecv_iqueue1(queue, msg);
          if (EAGAIN != err) break;
+         ++ queue->reader.signalcount;
          pthread_cond_wait(&queue->reader.cond, &queue->reader.lock);
       }
 
       -- queue->reader.waitcount;
       pthread_mutex_unlock(&queue->reader.lock);
-      if (!err) {
-         WAKEUP_WRITER();
-      }
    }
 
    return err;
