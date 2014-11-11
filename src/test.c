@@ -1100,7 +1100,7 @@ void test_multi_sendrecv(void)
                ++x;
                if (x == 1000000) {
                   // DEBUG:
-                  printf("usetry:%d rwait:%d wwait:%d wready:%d next_size:%x\n", usetry, queue->reader.waitcount, queue->writer.waitcount, s_threadsignal.waitcount, queue->next_size);
+                  printf("usetry:%d rwait:%d wwait:%d wready:%d\n", usetry, queue->reader.waitcount, queue->writer.waitcount, s_threadsignal.waitcount);
                   x = 0;
                }
             }

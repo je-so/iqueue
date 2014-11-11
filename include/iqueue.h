@@ -30,13 +30,12 @@ typedef struct iqsignal_t {
 typedef struct iqueue_t {
    uint32_t closed;
    uint32_t capacity;
-   uint32_t iused;
+   uint32_t iused; // index into sizeused
    uint32_t sizeused[256/*must be power of two*/];
    uint32_t readpos;
-   uint32_t ifree;
-   uint32_t sizefree[256/*same as sizeused*/];
+   uint32_t ifree; // index into sizefree
+   uint32_t sizefree[256/*same size as sizeused*/];
    uint32_t writepos;
-   uint32_t next_size;
    iqsignal_t reader;
    iqsignal_t writer;
    void*    msg[/*capacity*/];
