@@ -206,7 +206,7 @@ For every read or write a counter readpos/writepos is incremented atomically so 
 
 There is a possible race. A thread increments readpos/writepos and gets preempted before it could read from or write the msg into the buffer. Another thread reads or writes and increments the number of free/used items. Then another thread tries to overwrite to the not read message or read the not written message.
 
-To prevent this race a reading thread waits until the message slot in buffer is not **null** and sets the slot to **null** after reading atomically. A writer waits until the slot becomes null and the writes the message atomically.
+To prevent this race a reading thread waits until the message slot in buffer is not **null** and sets the slot to **null** after reading atomically. A writer waits until the slot becomes null and then writes the message atomically.
 
 Therefore iqueue_t does not support sending **null** pointers as message.
 
