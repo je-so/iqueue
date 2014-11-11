@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "iqueue.h"
 #include <stdio.h>
 
