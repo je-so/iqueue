@@ -8,10 +8,10 @@ except for waiting/blocking functions.
 It is designed to allow for zero-copy message transfer.
 
 **iqueue1_t:** This type supports a single reader thread and a single writer thread.
-It is up to 4 times faster than type iqueue_t (see [example4.c](example4.c)).
+It is up to 2 times faster than type iqueue_t (see [example4.c](example4.c)).
 
 **iqueue_t:** This type supports multiple readers and writers. Which makes it necessary
-to synchronize more state. Compare [trysend_iqueue](https://github.com/je-so/iqueue/blob/master/src/iqueue.c#L217) with [trysend_iqueue1](https://github.com/je-so/iqueue/blob/master/src/iqueue.c#L442).
+to synchronize more state. Compare [trysend_iqueue](https://github.com/je-so/iqueue/blob/master/src/iqueue.c#L222) with [trysend_iqueue1](https://github.com/je-so/iqueue/blob/master/src/iqueue.c#L443).
 
 
 The following examples use iqueue_t.
