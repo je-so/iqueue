@@ -200,5 +200,18 @@ int main(void)
 
 ## Internal Workings ##
 
-A new version is coming inspired by http://moodycamel.com/blog/2014/detailed-design-of-a-lock-free-queue.
+This version is inspired by http://moodycamel.com/blog/2014/detailed-design-of-a-lock-free-queue.
+iqueue_t uses a ring buffer to store its messages. Its size is always a power of two. 
 
+For every read or write a counter readpos/writepos is incremented atomically so that no two threads read from or write to the same position. If a thread has read or written its msg into the buffer a the number of free or used items are incremented by one. The number of free/used items are used to determine if a read or write is possible.
+
+There is a possible race. A thread increments readpos/writepos and gets preempted before it could read or write the msg into the buffer. Another thread reads or writes and increments the number of free/used items. Then another thread
+tries to write to the not read message or read the not written message.
+
+To prevent this race a reading thread waits until the message slot in buffer is not **null** and sets the slot to **null** after reading atomically. A writer waits until the slot becomes null and the writes the message atomically.
+
+Therefore iqueue_t does not support sending **null** pointers as message.
+
+To make iqueue_t fast the number of free/used items in the ring buffer are managed by an array of values (see sizeused/sizefree in https://github.com/je-so/iqueue/blob/master/include/iqueue.h#L30). This allows the use of simple atomic decrement operations without worrying about over decrementing (Whishlist: Atomic increment/decrement operations which allow do not increment beyond MAX and do not decrement below).
+
+If you use more than 128 threads you should increment the size of these arrays.
