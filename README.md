@@ -212,6 +212,6 @@ To prevent this race a reading thread waits until the message slot in buffer is 
 
 Therefore iqueue_t does not support sending **null** pointers as message.
 
-To make iqueue_t fast the number of free/used items in the ring buffer are managed by an array of values (see sizeused/sizefree in https://github.com/je-so/iqueue/blob/master/include/iqueue.h#L30). This allows the use of simple atomic decrement operations without worrying about over decrementing (Whishlist: Atomic increment/decrement operations which allow do not increment beyond MAX and do not decrement below).
+To make iqueue_t fast the number of free/used items in the ring buffer are managed by an array of values (see sizeused/sizefree in https://github.com/je-so/iqueue/blob/master/include/iqueue.h#L30). This allows the use of simple atomic decrement operations without worrying about over decrementing (Whishlist: Atomic increment/decrement operations which do not increment beyond a MAX value and which do not decrement below 0).
 
 If you use more than 128 threads you should increment the size of these arrays.
