@@ -55,7 +55,7 @@ typedef struct iqueue1_t {
 // === iqueue_t ===
 
 // Initializes queue
-// Possible error codes: EINVAL (capacity == 0) or ENOMEM
+// Possible error codes: EINVAL (capacity too big) or ENOMEM
 int new_iqueue(/*out*/iqueue_t** queue, uint32_t capacity);
 
 // Frees all resources of queue. Close is called automatically.
