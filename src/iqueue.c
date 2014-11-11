@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// === iqsignal0_t ===
+// === iqsignal_t ===
 
 static int init_mutex(/*out*/pthread_mutex_t* mutex)
 {
@@ -44,7 +44,7 @@ static int init_cond(/*out*/pthread_cond_t* cond)
    return err;
 }
 
-int init_iqsignal0(/*out*/iqsignal0_t* signal)
+int init_iqsignal(/*out*/iqsignal_t* signal)
 {
    int err;
 
@@ -54,14 +54,16 @@ int init_iqsignal0(/*out*/iqsignal0_t* signal)
    err = init_cond(&signal->cond);
    if (err) {
       (void) pthread_mutex_destroy(&signal->lock);
+      return err;
    }
 
    signal->waitcount = 0;
+   signal->signalcount = 0;
 
-   return err;
+   return 0;
 }
 
-int free_iqsignal0(iqsignal0_t* signal)
+int free_iqsignal(iqsignal_t* signal)
 {
    int err = pthread_mutex_destroy(&signal->lock);
    int err2 = pthread_cond_destroy(&signal->cond);
@@ -71,72 +73,70 @@ int free_iqsignal0(iqsignal0_t* signal)
    return err;
 }
 
-// === iqsignal_t ===
-
-int init_iqsignal(/*out*/iqsignal_t* signal)
+void wait_iqsignal(iqsignal_t* signal)
 {
-   int err;
-
-   err = init_iqsignal0(&signal->sign0);
-   if (err) return err;
-
-   signal->signalcount = 0;
-
-   return err;
-}
-
-int free_iqsignal(iqsignal_t* signal)
-{
-   int err = free_iqsignal0(&signal->sign0);
-   return err;
-}
-
-void wait_iqsignal(iqsignal_t * signal)
-{
-   pthread_mutex_lock(&signal->sign0.lock);
+   pthread_mutex_lock(&signal->lock);
 
    if (! signal->signalcount) {
-      ++ signal->sign0.waitcount;
-      pthread_cond_wait(&signal->sign0.cond, &signal->sign0.lock);
-      -- signal->sign0.waitcount;
+      ++ signal->waitcount;
+      pthread_cond_wait(&signal->cond, &signal->lock);
+      -- signal->waitcount;
    }
 
-   pthread_mutex_unlock(&signal->sign0.lock);
+   pthread_mutex_unlock(&signal->lock);
 }
 
-void signal_iqsignal(iqsignal_t * signal)
+void signal_iqsignal(iqsignal_t* signal)
 {
-   pthread_mutex_lock(&signal->sign0.lock);
+   pthread_mutex_lock(&signal->lock);
 
    ++ signal->signalcount;
-   pthread_cond_broadcast(&signal->sign0.cond);
+   pthread_cond_broadcast(&signal->cond);
 
-   pthread_mutex_unlock(&signal->sign0.lock);
+   pthread_mutex_unlock(&signal->lock);
 }
 
-uint32_t clearsignal_iqsignal(iqsignal_t * signal)
+uint32_t clearsignal_iqsignal(iqsignal_t* signal)
 {
-   pthread_mutex_lock(&signal->sign0.lock);
+   uint32_t oldval;
 
-   uint32_t oldval = signal->signalcount;
+   pthread_mutex_lock(&signal->lock);
+   oldval = signal->signalcount;
    signal->signalcount = 0;
-
-   pthread_mutex_unlock(&signal->sign0.lock);
+   pthread_mutex_unlock(&signal->lock);
 
    return oldval;
 }
 
+size_t signalcount_iqsignal(iqsignal_t* signal)
+{
+   size_t signalcount;
+
+   pthread_mutex_lock(&signal->lock);
+   signalcount = signal->signalcount;
+   pthread_mutex_unlock(&signal->lock);
+
+   return signalcount;
+}
+
 // === iqueue_t ===
+
+// length of iqueue_t:sizeused / iqueue_t:sizefree
+#define NROFSIZE ((int)(sizeof(((iqueue_t*)0)->sizeused)/sizeof(((iqueue_t*)0)->sizeused[0])))
 
 int new_iqueue(/*out*/iqueue_t** queue, uint32_t capacity)
 {
-   if (capacity == 0 || ((size_t)-1 - sizeof(iqueue_t))/(sizeof(uint8_t)+sizeof(void*)) <= capacity) {
-      return EINVAL;
+   uint32_t isNOTpowerof2 = (capacity & (capacity-1));
+   uint32_t aligned_capacity = capacity < NROFSIZE || isNOTpowerof2 ? NROFSIZE : capacity/2;
+
+   while (aligned_capacity < capacity) {
+      aligned_capacity <<= 1;
+      if (aligned_capacity >= ((size_t)-1 - sizeof(iqueue_t)) / sizeof(void*)) {
+         return EINVAL;
+      }
    }
 
-   capacity = 8192; // TODO:
-
-   size_t queuesize = sizeof(iqueue_t) + capacity * (sizeof(uint8_t)+sizeof(void*));
+   size_t queuesize = sizeof(iqueue_t) + aligned_capacity * sizeof(void*);
    iqueue_t* allocated_queue = (iqueue_t*) malloc(queuesize);
 
    if (!allocated_queue) {
@@ -144,17 +144,19 @@ int new_iqueue(/*out*/iqueue_t** queue, uint32_t capacity)
    }
 
    memset(allocated_queue, 0, queuesize);
-   allocated_queue->capacity = capacity;
-   allocated_queue->isvalid = (uint8_t*)allocated_queue + (sizeof(iqueue_t) + capacity * sizeof(void*));
+   allocated_queue->capacity = aligned_capacity;
+   for (int i = 0; i < NROFSIZE; ++i) {
+      allocated_queue->sizefree[i] = aligned_capacity / NROFSIZE;
+   }
 
    int err;
    int initcount = 0;
 
-   err = init_iqsignal0(&allocated_queue->reader);
+   err = init_iqsignal(&allocated_queue->reader);
    if (err) goto ONERR;
    initcount = 1;
 
-   err = init_iqsignal0(&allocated_queue->writer);
+   err = init_iqsignal(&allocated_queue->writer);
    if (err) goto ONERR;
    // initcount = 2;
 
@@ -163,7 +165,7 @@ int new_iqueue(/*out*/iqueue_t** queue, uint32_t capacity)
    return 0; /*OK*/
 ONERR:
    switch (initcount) {
-   case 1: free_iqsignal0(&allocated_queue->reader);
+   case 1: free_iqsignal(&allocated_queue->reader);
    case 0: break;
    }
    free(allocated_queue);
@@ -179,8 +181,8 @@ int delete_iqueue(iqueue_t** queue)
 
       close_iqueue(*queue);
 
-      err = free_iqsignal0(&(*queue)->writer);
-      err2 = free_iqsignal0(&(*queue)->reader);
+      err = free_iqsignal(&(*queue)->writer);
+      err2 = free_iqsignal(&(*queue)->reader);
       if (err2) err = err2;
 
       free(*queue);
@@ -219,38 +221,48 @@ void close_iqueue(iqueue_t* queue)
 
 int trysend_iqueue(iqueue_t* queue, void* msg)
 {
+   uint32_t ifree;
+
    if (0 == msg) {
       return EINVAL;
+   }
+
+   for (int i = 0;; ++i) {
+      ifree = queue->ifree;
+      if (queue->closed) return EPIPE;
+      uint32_t sizefree = fetchadd_atomicu32(&queue->sizefree[ifree], (uint32_t)-1) - 1;
+      if (sizefree < queue->capacity) break;
+      fetchadd_atomicu32(&queue->sizefree[ifree], 1);
+      cmpxchg_atomicu32(&queue->ifree, ifree, (ifree+1) & (NROFSIZE-1));
+      if (i == NROFSIZE-1) return EAGAIN;
    }
 
    uint32_t pos = fetchadd_atomicu32(&queue->writepos, 1);
    pos &= (queue->capacity-1);
 
-   if (queue->closed) {
-      return EPIPE;
-   }
-
-   if (0 != cmpxchg_atomicu8(&queue->isvalid[pos], 0, 1)) {
-      return EAGAIN;
-   }
-
    while (0 != cmpxchg_atomicptr(&queue->msg[pos], 0, msg)) ;
+
+   fetchadd_atomicu32(&queue->sizeused[ifree], 1);
 
    return 0;
 }
 
 int tryrecv_iqueue(iqueue_t* queue, /*out*/void** msg)
 {
+   uint32_t iused;
+
+   for (int i = 0;; ++i) {
+      iused = queue->iused;
+      if (queue->closed) return EPIPE;
+      uint32_t sizeused = fetchadd_atomicu32(&queue->sizeused[iused], (uint32_t)-1) - 1;
+      if (sizeused < queue->capacity) break;
+      fetchadd_atomicu32(&queue->sizeused[iused], 1);
+      cmpxchg_atomicu32(&queue->iused, iused, (iused+1) & (NROFSIZE-1));
+      if (i == NROFSIZE-1) return EAGAIN;
+   }
+
    uint32_t pos = fetchadd_atomicu32(&queue->readpos, 1);
    pos &= (queue->capacity-1);
-
-   if (queue->closed) {
-      return EPIPE;
-   }
-
-   if (1 != cmpxchg_atomicu8(&queue->isvalid[pos], 1, 0)) {
-      return EAGAIN;
-   }
 
    void* fetchedmsg;
    do {
@@ -258,6 +270,8 @@ int tryrecv_iqueue(iqueue_t* queue, /*out*/void** msg)
    } while (fetchedmsg != cmpxchg_atomicptr(&queue->msg[pos], fetchedmsg, 0) || 0 == fetchedmsg);
 
    *msg = fetchedmsg;
+
+   fetchadd_atomicu32(&queue->sizefree[iused], 1);
 
    return 0;
 }
@@ -328,6 +342,16 @@ int recv_iqueue(iqueue_t* queue, /*out*/void** msg)
    return err;
 }
 
+uint32_t size_iqueue(const iqueue_t* queue)
+{
+   uint32_t size = 0;
+   for (int i = 0; i < NROFSIZE; ++i) {
+      uint32_t sizeused = cmpxchg_atomicu32((uint32_t*)(uintptr_t)&queue->sizeused[i], 0, 0);
+      size += (sizeused < queue->capacity ? sizeused : 0);
+   }
+   return size <= queue->capacity ? size : queue->capacity;
+}
+
 // === iqueue1_t ===
 
 int new_iqueue1(/*out*/iqueue1_t** queue, uint32_t capacity)
@@ -349,11 +373,11 @@ int new_iqueue1(/*out*/iqueue1_t** queue, uint32_t capacity)
    int err;
    int initcount = 0;
 
-   err = init_iqsignal0(&allocated_queue->reader);
+   err = init_iqsignal(&allocated_queue->reader);
    if (err) goto ONERR;
    initcount = 1;
 
-   err = init_iqsignal0(&allocated_queue->writer);
+   err = init_iqsignal(&allocated_queue->writer);
    if (err) goto ONERR;
    // initcount = 2;
 
@@ -362,7 +386,7 @@ int new_iqueue1(/*out*/iqueue1_t** queue, uint32_t capacity)
    return 0; /*OK*/
 ONERR:
    switch (initcount) {
-   case 1: free_iqsignal0(&allocated_queue->reader);
+   case 1: free_iqsignal(&allocated_queue->reader);
    case 0: break;
    }
    free(allocated_queue);
@@ -378,8 +402,8 @@ int delete_iqueue1(iqueue1_t** queue)
 
       close_iqueue1(*queue);
 
-      err = free_iqsignal0(&(*queue)->writer);
-      err2 = free_iqsignal0(&(*queue)->reader);
+      err = free_iqsignal(&(*queue)->writer);
+      err2 = free_iqsignal(&(*queue)->reader);
       if (err2) err = err2;
 
       free(*queue);

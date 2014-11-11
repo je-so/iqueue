@@ -3,7 +3,7 @@
 #include <stdio.h>
 
 struct addmsg_t {
-   iqmsg_t header;
+   iqsignal_t* sign;
    int arg1, arg2; // in param
    int sum;        // out param
 };
@@ -14,7 +14,7 @@ void* server(void* queue)
    while (0 == recv_iqueue(queue, &msg)) {
       ((struct addmsg_t*)msg)->sum  = ((struct addmsg_t*)msg)->arg1;
       ((struct addmsg_t*)msg)->sum += ((struct addmsg_t*)msg)->arg2;
-      setprocessed_iqmsg(&((struct addmsg_t*)msg)->header);
+      signal_iqsignal(((struct addmsg_t*)msg)->sign);
    }
    return 0;
 }
@@ -23,10 +23,11 @@ void* client(void* queue)
 {
    iqsignal_t signal;
    struct addmsg_t msg[3] = {
-      { iqmsg_INIT(&signal), 1, 2, 0 },
-      { iqmsg_INIT(&signal), 3, 4, 0 },
-      { iqmsg_INIT(&signal), 5, 6, 0 }
+      { &signal, 1, 2, 0 },
+      { &signal, 3, 4, 0 },
+      { &signal, 5, 6, 0 }
    };
+   init_iqsignal(&signal);
    for (int i = 0; i < 3; ++i) {
       send_iqueue(queue, &msg[i]);
    }
@@ -35,7 +36,6 @@ void* client(void* queue)
       // ... process other things ...
    }
    for (int i = 0; i < 3; ++i) {
-      assert(isprocessed_iqmsg(&msg[i].header));
       assert(msg[i].sum == msg[i].arg1 + msg[i].arg2);
    }
    printf("Client: All messages processed\n");

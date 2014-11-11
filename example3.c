@@ -1,11 +1,10 @@
 #define _GNU_SOURCE
 #include "iqueue.h"
 #include <stdio.h>
-#include <signal.h>
 
 struct echomsg_t {
    const char* str;  // in param
-   pthread_t thread; // used to signal ready
+   iqueue1_t*  processed; // used to signal ready
 };
 
 iqueue_DECLARE(echoqueue, struct echomsg_t)
@@ -17,22 +16,25 @@ void* server(void* queue)
    while (0 == recv_echoqueue(echoqueue, &msg)) {
       printf("Echo: %s\n", msg->str);
       // Signal client
-      pthread_kill(msg->thread, SIGUSR1);
+      send_iqueue1(msg->processed, msg);
    }
    return 0;
 }
 
 void* client(void* queue)
 {
+   iqueue1_t*   processed;
+   new_iqueue1(&processed, 1);
    echoqueue_t* echoqueue = queue;
-   struct echomsg_t msg = { "Hello Server", pthread_self() };
+   struct echomsg_t msg = { "Hello Server", processed };
    send_echoqueue(echoqueue, &msg);
    // Wait for server
-   int signr;
-   sigset_t sigset;
-   sigemptyset(&sigset);
-   sigaddset(&sigset, SIGUSR1);
-   sigwait(&sigset, &signr);
+   void* msg2 = 0;
+   recv_iqueue1(processed, &msg2);
+   if (msg2 == &msg) {
+      printf("Client: msg has been processed\n");
+   }
+   delete_iqueue1(&processed);
    return 0;
 }
 
@@ -40,10 +42,6 @@ int main(void)
 {
    echoqueue_t queue;
    pthread_t cthr, sthr;
-   sigset_t sigset;
-   sigemptyset(&sigset);
-   sigaddset(&sigset, SIGUSR1);
-   sigprocmask(SIG_BLOCK, &sigset, 0);
    init_echoqueue(&queue, 1);
    pthread_create(&sthr, 0, &server, &queue);
    pthread_create(&cthr, 0, &client, &queue);

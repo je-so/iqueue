@@ -21,13 +21,6 @@ static inline void* cmpxchg_atomicptr(void** pval, void* oldval, void* newval)
 }
 
 // Does the following operations in one atomic step:
-// { uint8_t old = *pval; if (old == oldval) *pval = newval; return old; }
-static inline uint8_t cmpxchg_atomicu8(uint8_t* pval, uint8_t oldval, uint8_t newval)
-{
-         return __sync_val_compare_and_swap(pval, oldval, newval);
-}
-
-// Does the following operations in one atomic step:
 // { uint32_t old = *pval; if (old == oldval) *pval = newval; return old; }
 static inline uint32_t cmpxchg_atomicu32(uint32_t* pval, uint32_t oldval, uint32_t newval)
 {

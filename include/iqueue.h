@@ -19,32 +19,26 @@
 #include <stdint.h>
 #include "atomic.h"
 
-typedef struct iqsignal0_t {
+typedef struct iqsignal_t {
    pthread_mutex_t lock;
    pthread_cond_t  cond;
    size_t waitcount;
-} iqsignal0_t;
-
-typedef struct iqsignal_t {
-   iqsignal0_t sign0;
    size_t signalcount;
 } iqsignal_t;
-
-typedef struct iqmsg_t {
-   iqsignal_t* signal;
-   uint32_t processed;
-} iqmsg_t;
 
 // Supports multi reader / multi writer
 typedef struct iqueue_t {
    uint32_t closed;
    uint32_t capacity;
+   uint32_t iused;
+   uint32_t sizeused[256/*must be power of two*/];
    uint32_t readpos;
+   uint32_t ifree;
+   uint32_t sizefree[256/*same as sizeused*/];
    uint32_t writepos;
    uint32_t next_size;
-   iqsignal0_t reader;
-   iqsignal0_t writer;
-   uint8_t* isvalid;
+   iqsignal_t reader;
+   iqsignal_t writer;
    void*    msg[/*capacity*/];
 } iqueue_t;
 
@@ -54,8 +48,8 @@ typedef struct iqueue1_t {
    uint32_t capacity;
    uint32_t readpos;
    uint32_t writepos;
-   iqsignal0_t reader;
-   iqsignal0_t writer;
+   iqsignal_t reader;
+   iqsignal_t writer;
    void*   msg[/*capacity*/];
 } iqueue1_t;
 
@@ -97,10 +91,7 @@ static inline uint32_t capacity_iqueue(const iqueue_t* queue)
 }
 
 // Returns number of stored (unread) messages.
-static inline uint16_t size_iqueue(const iqueue_t* queue)
-{
-         return (uint16_t) cmpxchg_atomicu32((uint32_t*)(uintptr_t)&queue->next_size, 0, 0);
-}
+uint32_t size_iqueue(const iqueue_t* queue);
 
 // === iqsignal_t ===
 
@@ -114,44 +105,13 @@ int free_iqsignal(iqsignal_t* signal);
 void wait_iqsignal(iqsignal_t* signal);
 
 // Clears signalcount to 0 and returns previous value
-uint32_t clearsignal_iqsignal(iqsignal_t * signal);
+uint32_t clearsignal_iqsignal(iqsignal_t* signal);
 
 // Increments signalcount by one and wakes up all threads waiting with wait_iqsignal(signal).
 void signal_iqsignal(iqsignal_t* signal);
 
 // Returns the how many times signal_iqsignal(signal) was called (Nr of processed messages).
-static inline size_t signalcount_iqsignal(iqsignal_t* signal)
-{
-         return cmpxchg_atomicsize(&signal->signalcount, 0, 0);
-}
-
-// === iqmsg_t ===
-
-// Static initializer for iqmsg_t. Parameter signal is used by a receiver to signal the message as processed.
-// If you do not want to receive signals set this value to 0.
-#define iqmsg_INIT(signal) \
-         { signal, 0 }
-
-// Initializer for msg. Parameter signal is used by a receiver to signal the message as processed.
-// If you do not want to receive signals set this value to 0.
-static inline void init_iqmsg(iqmsg_t* msg, iqsignal_t* signal)
-{
-         msg->signal = signal;
-         msg->processed = 0;
-}
-
-static inline uint32_t isprocessed_iqmsg(iqmsg_t* msg)
-{
-         return cmpxchg_atomicu32(&msg->processed, 0, 0);
-}
-
-static inline void setprocessed_iqmsg(iqmsg_t* msg)
-{
-         cmpxchg_atomicu32(&msg->processed, 0, 1);
-         if (msg->signal) {
-            signal_iqsignal(msg->signal);
-         }
-}
+size_t signalcount_iqsignal(iqsignal_t* signal);
 
 // === iqueue1_t ===
 

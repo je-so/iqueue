@@ -2,7 +2,7 @@
 #include <stdio.h>
 
 struct echomsg_t {
-   iqmsg_t header;
+   iqsignal_t  sign;
    const char* str; // in param
    int err;         // out param
 };
@@ -15,17 +15,19 @@ void* server(void* queue)
       // set return value (no error)
       ((struct echomsg_t*)msg)->err = 0;
       // signal client it is safe to delete msg
-      setprocessed_iqmsg(&((struct echomsg_t*)msg)->header);
+      signal_iqsignal(&((struct echomsg_t*)msg)->sign);
    }
    return 0;
 }
 
 void* client(void* queue)
 {
-   iqsignal_t signal;
-   struct echomsg_t msg = { iqmsg_INIT(&signal), "Hello Server", 1 };
+   struct echomsg_t msg;
+   init_iqsignal(&msg.sign);
+   msg.str = "Hello Server";
+   msg.err = 1;
    send_iqueue(queue, &msg);
-   wait_iqsignal(&signal); // wait until msg was processed
+   wait_iqsignal(&msg.sign); // wait until msg was processed
    return (void*) msg.err;
 }
 
