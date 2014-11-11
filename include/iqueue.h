@@ -160,7 +160,7 @@ uint32_t size_iqueue1(const iqueue1_t* queue);
          typedef struct affix ##_t { \
             iqueue_t* queue;          \
          } affix ##_t;               \
-         static inline int init_##affix(affix##_t* queue, uint16_t capacity) \
+         static inline int init_##affix(affix##_t* queue, uint32_t capacity) \
          { \
             return new_iqueue(&queue->queue, capacity); \
          } \
