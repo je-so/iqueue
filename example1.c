@@ -14,7 +14,7 @@ void* server(void* queue)
       printf("Echo: %s\n", ((struct echomsg_t*)msg)->str);
       // set return value (no error)
       ((struct echomsg_t*)msg)->err = 0;
-      // signal client it is safe to delete msg
+      // signal client msg has been processed
       signal_iqsignal(&((struct echomsg_t*)msg)->sign);
    }
    return 0;
@@ -27,7 +27,7 @@ void* client(void* queue)
    msg.str = "Hello Server";
    msg.err = 1;
    send_iqueue(queue, &msg);
-   wait_iqsignal(&msg.sign); // wait until msg was processed
+   wait_iqsignal(&msg.sign); // wait until msg has been processed
    return (void*) msg.err;
 }
 
