@@ -5,7 +5,7 @@ C implementation of interthread message queue.
 
 It is implemented without locks (lock-free)
 except for waiting/blocking functions.
-It is designed to allow for zero-copy message transfer.
+It is designed to allow for zero-copy message transfer. Only a pointer to the message is transfered. The message itself is not copied.
 
 **iqueue1_t:** This type supports a single reader thread and a single writer thread.
 It is up to 2 times faster than type iqueue_t (see [example4.c](example4.c)).
@@ -18,11 +18,9 @@ The following examples use iqueue_t.
 
 ## Client Server Example
 
-Only a pointer to the message is transfered. The message itself
-is not copied. The server responds to the client request with
+The client sends an *echomsg_t* and waits until it has been processed. The server responds to the client request with
 an error code and signals the client if the message has been processed.
-Two implemented types *iqmsg_t* and *iqsignal_t* support the notification of a client 
-whenever a message has been processed.
+The helper type *iqsignal_t* supports the notification of a client whenever a message has been processed.
 
 ```C
 #include "iqueue.h"
