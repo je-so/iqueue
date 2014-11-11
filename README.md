@@ -140,24 +140,19 @@ int main(void)
 }
 ```
 
-## Example with Unix Signals and Statically Typed Messages
+## Example with Statically Typed Messages
 
-Shows usage of macro *iqueue_DECLARE*. Use it to make an iqueue_t type safe. It redeclares the fct_iqueue interface as fct_echoqueue and declares type echoqueue_t which mirrors iqueue_t. The redeclared interface processes messages of type *struct echomsg_t** instead of generic type void*. This example also shows the usage of Unix signals to signal the client of the fact that the server has processed the message.
+This example shows the usage of macro *iqueue_DECLARE*. It is used to make an iqueue_t type safe. It redeclares the iqueue interface as yyy_echoqueue and declares type echoqueue_t which contains a pointer to iqueue_t. The redeclared interface processes messages of type *struct echomsg_t** instead of generic type void*. This example also uses the single reader/writer queue iqueue1_t to signal the client of the fact that the server has processed the message.
 
 ```C
-
-#define _GNU_SOURCE
 #include "iqueue.h"
 #include <stdio.h>
-#include <signal.h>
 
 struct echomsg_t {
    const char* str;  // in param
-   pthread_t thread; // used to signal ready
+   iqueue1_t*  processed; // used to signal ready
 };
 
-// declare type echoqueue_t and interface fct_echoqueue 
-// which processes messages of type struct echomsg_t
 iqueue_DECLARE(echoqueue, struct echomsg_t)
 
 void* server(void* queue)
@@ -167,22 +162,25 @@ void* server(void* queue)
    while (0 == recv_echoqueue(echoqueue, &msg)) {
       printf("Echo: %s\n", msg->str);
       // Signal client
-      pthread_kill(msg->thread, SIGUSR1);
+      send_iqueue1(msg->processed, msg);
    }
    return 0;
 }
 
 void* client(void* queue)
 {
+   iqueue1_t*   processed;
+   new_iqueue1(&processed, 1);
    echoqueue_t* echoqueue = queue;
-   struct echomsg_t msg = { "Hello Server", pthread_self() };
+   struct echomsg_t msg = { "Hello Server", processed };
    send_echoqueue(echoqueue, &msg);
    // Wait for server
-   int signr;
-   sigset_t sigset;
-   sigemptyset(&sigset);
-   sigaddset(&sigset, SIGUSR1);
-   sigwait(&sigset, &signr);
+   void* msg2 = 0;
+   recv_iqueue1(processed, &msg2);
+   if (msg2 == &msg) {
+      printf("Client: msg has been processed\n");
+   }
+   delete_iqueue1(&processed);
    return 0;
 }
 
@@ -190,10 +188,6 @@ int main(void)
 {
    echoqueue_t queue;
    pthread_t cthr, sthr;
-   sigset_t sigset;
-   sigemptyset(&sigset);
-   sigaddset(&sigset, SIGUSR1);
-   sigprocmask(SIG_BLOCK, &sigset, 0);
    init_echoqueue(&queue, 1);
    pthread_create(&sthr, 0, &server, &queue);
    pthread_create(&cthr, 0, &client, &queue);
