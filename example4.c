@@ -13,39 +13,39 @@ static struct timeval endtime[MAXTHREAD];
 
 void* server1(void* id)
 {
-   gettimeofday(&starttime[(int)id], 0);
    for (int i = 1; i <= 1000000; ++i) {
       void* msg;
       while (tryrecv_iqueue1(s_queue1, &msg)) ;
    }
+   gettimeofday(&endtime[(int)id], 0);
    return 0;
 }
 
 void* client1(void* id)
 {
+   gettimeofday(&starttime[(int)id], 0);
    for (uintptr_t i = 1; i <= 1000000; ++i) {
       while (trysend_iqueue1(s_queue1, (void*)i)) ;
    }
-   gettimeofday(&endtime[(int)id], 0);
    return 0;
 }
 
 void* server2(void* id)
 {
-   gettimeofday(&starttime[(int)id], 0);
    for (int i = 1; i <= 1000000; ++i) {
       void* msg;
       while (tryrecv_iqueue(s_queue2, &msg)) ;
    }
+   gettimeofday(&endtime[(int)id], 0);
    return 0;
 }
 
 void* client2(void* id)
 {
+   gettimeofday(&starttime[(int)id], 0);
    for (uintptr_t i = 1; i <= 1000000; ++i) {
       while (trysend_iqueue(s_queue2, (void*)i)) ;
    }
-   gettimeofday(&endtime[(int)id], 0);
    return 0;
 }
 
