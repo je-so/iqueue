@@ -60,9 +60,9 @@ int iperf_prepare(iperf_param_t* param)
 
    if (!s_queue1 && !s_queue2) {
       if (param->nrinstance <= 2) {
-         err = new_iqueue1(&s_queue1, 10000);
+         err = new_iqueue1(&s_queue1, 1000000);
       } else {
-         err = new_iqueue(&s_queue2, 100000);
+         err = new_iqueue(&s_queue2, 1000000);
       }
    }
 
