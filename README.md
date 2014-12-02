@@ -7,11 +7,20 @@ It is designed to allow for zero-copy message transfer. Only a pointer to the me
 The name of the lock-free functions begin with a try (trysend_iqueue and tryrecv_iqueue). There are also blocking versions named send_iqueue / recv_iqueue which uses pthread condition variables to wait for the queue becoming nonfull or non-empty.
 
 **iqueue1_t:** This type supports a single reader thread and a single writer thread.
-It is up to 2 times faster than type iqueue_t (see [example4.c](example4.c)).
+It is up to 8 times faster than type iqueue_t.
 
 **iqueue_t:** This type supports multiple readers and writers. Which makes it necessary
 to synchronize more state. Compare [trysend_iqueue](https://github.com/je-so/iqueue/blob/master/src/iqueue.c#L222) with [trysend_iqueue1](https://github.com/je-so/iqueue/blob/master/src/iqueue.c#L443).
 
+The performance on a 2 GHZ x86 quad core is (see [example4.c](example4.c)):
+* (iqueue1_t) 1000000 messages are transfered from one client to one server with ca. **40000** msg/millisecond.
+* (iqueue_t) The performance drops in case of 4 threads (2 clients/servers) to **3000** msg/msec.
+* (iqueue_t) For 44 threads performance settles to less than **6000** msg/msec.
+
+Without padding of the variables up to the size of one cache line to prevent [false sharing](http://en.wikipedia.org/wiki/False_sharing) performance drops to:
+* 5500 msg/msec
+* 1500 msg/msec
+* 2000 msg/msec
 
 The following examples use iqueue_t.
 
