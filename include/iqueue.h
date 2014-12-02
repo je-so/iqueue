@@ -14,10 +14,22 @@
 #ifndef IQUEUE_H
 #define IQUEUE_H
 
+// defines the size of the cache line
+// if this value is undefined cache line alignment is turned off !
+#define SIZE_CACHELINE 64
+
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "atomic.h"
+
+// defines padding function which prevents false sharing of variables
+// http://en.wikipedia.org/wiki/False_sharing
+#ifdef SIZE_CACHELINE
+#   define PAD(_NR, _NROFBYTES_LESS) uint8_t _align ## _NR [(SIZE_CACHELINE) - (_NROFBYTES_LESS)];
+#else
+#   define PAD(_NR, _NROFBYTES_LESS) 
+#endif
 
 typedef struct iqsignal_t {
    pthread_mutex_t lock;
@@ -30,12 +42,17 @@ typedef struct iqsignal_t {
 typedef struct iqueue_t {
    uint32_t closed;
    uint32_t capacity;
+   PAD(0, 2*sizeof(uint32_t))
    uint32_t iused; // index into sizeused
-   uint32_t sizeused[256/*must be power of two*/];
+   PAD(1, sizeof(uint32_t))
    uint32_t readpos;
+   PAD(2, sizeof(uint32_t))
    uint32_t ifree; // index into sizefree
-   uint32_t sizefree[256/*same size as sizeused*/];
+   PAD(3, sizeof(uint32_t))
    uint32_t writepos;
+   PAD(4, sizeof(uint32_t))
+   uint32_t sizeused[256/*must be power of two*/];
+   uint32_t sizefree[256/*same size as sizeused*/];
    iqsignal_t reader;
    iqsignal_t writer;
    void*    msg[/*capacity*/];
@@ -45,7 +62,9 @@ typedef struct iqueue_t {
 typedef struct iqueue1_t {
    uint32_t closed;
    uint32_t capacity;
+   PAD(0, 2*sizeof(uint32_t))
    uint32_t readpos;
+   PAD(1, sizeof(uint32_t))
    uint32_t writepos;
    iqsignal_t reader;
    iqsignal_t writer;
@@ -194,5 +213,7 @@ uint32_t size_iqueue1(const iqueue1_t* queue);
             *msg = tmp; \
             return err; \
          }
+
+#undef PAD
 
 #endif
