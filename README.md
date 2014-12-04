@@ -12,15 +12,12 @@ It is up to 8 times faster than type iqueue_t.
 **iqueue_t:** This type supports multiple readers and writers. Which makes it necessary
 to synchronize more state. Compare [trysend_iqueue](https://github.com/je-so/iqueue/blob/master/src/iqueue.c#L222) with [trysend_iqueue1](https://github.com/je-so/iqueue/blob/master/src/iqueue.c#L443).
 
-The performance on a 2 GHZ x86 quad core is (see [example4.c](example4.c)):
-* (iqueue1_t) 1000000 messages are transfered from one client to one server with ca. **40000** msg/millisecond.
-* (iqueue_t) The performance drops in case of 4 threads (2 clients/servers) to **3000** msg/msec.
-* (iqueue_t) For 44 threads performance settles to less than **6000** msg/msec.
+To prevent [false sharing](http://en.wikipedia.org/wiki/False_sharing) the size of all variables are padded up to the size of one cache line. The following list shows the performance on a 2 GHZ x86 quad core (see [example4.c](example4.c)):
+* (iqueue1_t) **40000** (unpadded **5500**) msg/msec; messages transfered from one client to one server.
+* (iqueue_t) **3000** (unpadded **1500**) msg/msec; performance drops in case of 4 threads (2 clients + 2 servers).
+* (iqueue_t) **6000** (unpadded **2000**) msg/msec; performance settles to this value in case of 44 threads.
 
-Without padding of the variables up to the size of one cache line to prevent [false sharing](http://en.wikipedia.org/wiki/False_sharing) performance drops to:
-* 5500 msg/msec
-* 1500 msg/msec
-* 2000 msg/msec
+The value [SIZE_CACHELINE](include/iqueue.h#L19) defines the size of one cache line. If this value is undefined no padding is done at all.
 
 The following examples use iqueue_t.
 
