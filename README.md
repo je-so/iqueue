@@ -4,7 +4,7 @@ iqueue
 C implementation of interthread message queue. It is implemented without locks (lock-free). 
 It is designed to allow for zero-copy message transfer. Only a pointer to the message is transfered. The message itself is not copied.
 
-The name of the lock-free functions begin with a try (trysend_iqueue and tryrecv_iqueue). There are also blocking versions named send_iqueue / recv_iqueue which uses pthread condition variables to wait for the queue becoming nonfull or non-empty.
+The names of the lock-free functions begin with a try (trysend_iqueue and tryrecv_iqueue). There are also blocking versions named send_iqueue / recv_iqueue which use pthread condition variables to wait for the queue becoming nonfull or non-empty.
 
 **iqueue1_t:** This type supports a single reader thread and a single writer thread.
 It is up to 8 times faster than type iqueue_t.
