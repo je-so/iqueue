@@ -116,9 +116,8 @@ int allocated_bytes(/*out*/size_t* nrofbytes)
    }
 
    // remove last two lines
-   for (unsigned i = 3; len > 0; --len) {
-      i -= (buffer[len] == '\n');
-      if (!i) break;
+   for (unsigned i = 3; i > 0 && len > 0; ) {
+      i -= (buffer[--len] == '\n');
    }
 
    while (len > 0
